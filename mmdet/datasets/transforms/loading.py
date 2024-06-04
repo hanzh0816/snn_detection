@@ -67,7 +67,7 @@ class LoadImageFromNDArray(LoadImageFromFile):
 
 
 @TRANSFORMS.register_module()
-class LoadImageFromNDarryFile(BaseTransform):
+class LoadImageFromNDarrayFile(BaseTransform):
     """Load event-based image from .npy file.
 
     Required Keys:
