@@ -41,15 +41,25 @@ class PackDetInputs(BaseTransform):
             Default: ``('img_id', 'img_path', 'ori_shape', 'img_shape',
             'scale_factor', 'flip', 'flip_direction')``
     """
+
     mapping_table = {
-        'gt_bboxes': 'bboxes',
-        'gt_bboxes_labels': 'labels',
-        'gt_masks': 'masks'
+        "gt_bboxes": "bboxes",
+        "gt_bboxes_labels": "labels",
+        "gt_masks": "masks",
     }
 
-    def __init__(self,
-                 meta_keys=('img_id', 'img_path', 'ori_shape', 'img_shape',
-                            'scale_factor', 'flip', 'flip_direction')):
+    def __init__(
+        self,
+        meta_keys=(
+            "img_id",
+            "img_path",
+            "ori_shape",
+            "img_shape",
+            "scale_factor",
+            "flip",
+            "flip_direction",
+        ),
+    ):
         self.meta_keys = meta_keys
 
     def transform(self, results: dict) -> dict:
@@ -78,16 +88,16 @@ class PackDetInputs(BaseTransform):
             # Refer to https://github.com/open-mmlab/mmdetection/pull/9533
             # for more details
             if "event" in results:
-                # event-based image shape is T*C*H*W
-                T, C, H, W = img.shape
+                # event-based image shape is T*H*W*C
+                T, H, W, C = img.shape
                 img = img.reshape(
-                    T * C, H, W
+                    T, H, W, C
                 )  # reshape as T*C,H,W to organize into batches
                 if not img.flags.c_contiguous:
-                    img = np.ascontiguousarray(img)
+                    img = np.ascontiguousarray(img.transpose(0, 3, 1, 2))
                     img = to_tensor(img)
                 else:
-                    img = to_tensor(img).contiguous()
+                    img = to_tensor(img).permute(0, 3, 1, 2).contiguous()
             else:
                 if not img.flags.c_contiguous:
                     img = np.ascontiguousarray(img.transpose(2, 0, 1))
