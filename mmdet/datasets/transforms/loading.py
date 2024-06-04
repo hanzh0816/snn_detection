@@ -153,7 +153,7 @@ class LoadImageFromNDarryFile(BaseTransform):
 
         filename = results["img_path"]
         try:
-            img = np.load(filename)  # T,C,H,W
+            img = np.load(filename)  # T,H,W,C
         except Exception as e:
             if self.ignore_empty:
                 return None
@@ -166,8 +166,8 @@ class LoadImageFromNDarryFile(BaseTransform):
             img = img.astype(np.float32)
 
         results["img"] = img
-        results["img_shape"] = img.shape[2:]
-        results["ori_shape"] = img.shape[2:]
+        results["img_shape"] = img.shape[1:3]
+        results["ori_shape"] = img.shape[1:3]
         results["event"] = True
         return results
 
