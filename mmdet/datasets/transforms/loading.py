@@ -154,7 +154,7 @@ class LoadImageFromNDarrayFile(BaseTransform):
         filename = results["img_path"]
         try:
             img = np.load(filename)  # T,W,H,C
-            img = np.transpose(img, (0, 2, 1, 3))
+            img = np.transpose(img, (0, 2, 1, 3)) # T,H,W,C
         except Exception as e:
             if self.ignore_empty:
                 return None

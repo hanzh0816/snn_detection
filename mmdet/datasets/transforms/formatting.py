@@ -88,19 +88,17 @@ class PackDetInputs(BaseTransform):
             # Refer to https://github.com/open-mmlab/mmdetection/pull/9533
             # for more details
             if "event" in results:
-                # event-based image shape is T*H*W*C
+                # event-based image shape is T,H,W,C
                 T, H, W, C = img.shape
                 img = img.reshape(
                     T, H, W, C
-                )  # reshape as T*C,H,W to organize into batches
+                )  
+                # reshape as T,C,H,W to organize into batches
                 if not img.flags.c_contiguous:
                     img = np.ascontiguousarray(img.transpose(0, 3, 1, 2))
                     img = to_tensor(img)
-                    print(img.shape)
                 else:
                     img = to_tensor(img).permute(0, 3, 1, 2).contiguous()
-                    
-                    print(img.shape)
             else:
                 if not img.flags.c_contiguous:
                     img = np.ascontiguousarray(img.transpose(2, 0, 1))
