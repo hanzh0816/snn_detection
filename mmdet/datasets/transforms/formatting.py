@@ -96,8 +96,11 @@ class PackDetInputs(BaseTransform):
                 if not img.flags.c_contiguous:
                     img = np.ascontiguousarray(img.transpose(0, 3, 1, 2))
                     img = to_tensor(img)
+                    print(img.shape)
                 else:
                     img = to_tensor(img).permute(0, 3, 1, 2).contiguous()
+                    
+                    print(img.shape)
             else:
                 if not img.flags.c_contiguous:
                     img = np.ascontiguousarray(img.transpose(2, 0, 1))
