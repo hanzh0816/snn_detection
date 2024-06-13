@@ -64,7 +64,7 @@ def main():
             osp.join(args.output_dir, osp.basename(img_path))
             if args.output_dir is not None
             else None
-        )[:-3]+'jpg'
+        )[:-3]+'jpg' # type: ignore
 
         img = img[..., [2, 1, 0]]  # bgr to rgb
         gt_bboxes = gt_instances.get("bboxes", None)
