@@ -152,7 +152,7 @@ class MS_GetT(BaseModule):
     generate temporal data from standard input
     """
 
-    def __init__(self, T=4):
+    def __init__(self, T=4, **kwargs):
         super().__init__()
         self.T = T
 
@@ -169,7 +169,7 @@ class MS_CancelT(BaseModule):
     cancel tempral dimension from input
     """
 
-    def __init__(self, T=2):
+    def __init__(self, T=4, **kwargs):
         super().__init__()
         self.T = T
 
@@ -230,7 +230,7 @@ class SepConv(BaseModule):
 
     def __init__(
         self,
-        dim,
+        in_channels,
         expansion_ratio=2,
         bias=False,
         kernel_size=3,  # 7,3
@@ -238,9 +238,11 @@ class SepConv(BaseModule):
     ):
         super().__init__()
         padding = int((kernel_size - 1) / 2)
-        med_channels = int(expansion_ratio * dim)
+        med_channels = int(expansion_ratio * in_channels)
         self.lif1 = LIFNeuron()
-        self.pwconv1 = nn.Conv2d(dim, med_channels, kernel_size=1, stride=1, bias=bias)
+        self.pwconv1 = nn.Conv2d(
+            in_channels, med_channels, kernel_size=1, stride=1, bias=bias
+        )
         self.bn1 = nn.BatchNorm2d(med_channels)
         self.lif2 = LIFNeuron()
         self.dwconv = nn.Conv2d(
@@ -253,9 +255,9 @@ class SepConv(BaseModule):
         )  # depthwise conv
 
         self.pwconv2 = nn.Conv2d(
-            med_channels, dim, kernel_size=1, stride=1, bias=bias, groups=4
+            med_channels, in_channels, kernel_size=1, stride=1, bias=bias, groups=4
         )
-        self.bn2 = nn.BatchNorm2d(dim)
+        self.bn2 = nn.BatchNorm2d(in_channels)
 
     def forward(self, x):
         T, B, _, H, W = x.shape
@@ -275,23 +277,29 @@ class RepConv(BaseModule):
     """
 
     def __init__(
-        self, in_channel, out_channel, kernel_size=3, full=True, bias=False, group=1
+        self, in_channels, out_channel, kernel_size=3, full=True, bias=False, group=1
     ):
         super().__init__()
         padding = int((kernel_size - 1) / 2)
-        conv1x1 = nn.Conv2d(in_channel, in_channel, 1, 1, 0, bias=bias, groups=group)
-        bn = BNAndPadLayer(pad_pixels=padding, num_features=in_channel)
+        conv1x1 = nn.Conv2d(in_channels, in_channels, 1, 1, 0, bias=bias, groups=group)
+        bn = BNAndPadLayer(pad_pixels=padding, num_features=in_channels)
         if full:
             dw_conv = nn.Conv2d(
-                in_channel, in_channel, kernel_size, 1, 0, groups=group, bias=bias
+                in_channels, in_channels, kernel_size, 1, 0, groups=group, bias=bias
             )  # using all channel to conv
         else:
             dw_conv = nn.Conv2d(
-                in_channel, in_channel, kernel_size, 1, 0, groups=in_channel, bias=bias
+                in_channels,
+                in_channels,
+                kernel_size,
+                1,
+                0,
+                groups=in_channels,
+                bias=bias,
             )  # using depth-wise conv
         conv3x3 = nn.Sequential(
             dw_conv,
-            nn.Conv2d(in_channel, out_channel, 1, 1, 0, groups=group, bias=bias),
+            nn.Conv2d(in_channels, out_channel, 1, 1, 0, groups=group, bias=bias),
             nn.BatchNorm2d(out_channel),
         )
 
@@ -302,23 +310,35 @@ class RepConv(BaseModule):
 
 
 class SpikeConv(BaseModule):
-    # Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)
+    """
+    ConvBlock Class with spike neuron
+    pipeline: lif ==> Conv ==> BN
+    """
 
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernal_size=1,
+        stride=1,
+        padding=None,
+        groups=1,
+        dilation=1,
+    ):
         super().__init__()
-        self.s = s
+        self.s = stride
         self.conv = nn.Conv2d(
-            in_channels=c1,
-            out_channels=c2,
-            kernel_size=k,
-            stride=s,
-            padding=autopad(k, p, d),  # type:ignore
-            groups=g,
-            dilation=d,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernal_size,
+            stride=stride,
+            padding=autopad(kernal_size, padding, dilation),  # type:ignore
+            groups=groups,
+            dilation=dilation,
             bias=False,
         )
         self.lif = LIFNeuron(spike_mode="lif")
-        self.bn = nn.BatchNorm2d(c2)
+        self.bn = nn.BatchNorm2d(out_channels)
 
     def forward(self, x):
         T, B, _, H, W = x.shape
@@ -331,19 +351,21 @@ class SpikeConv(BaseModule):
 
 class MS_ConvBlock(BaseModule):
     """
-    ConvBlock Class
+    ConvBlock Class with MS shortcut
     pipeline: x ==> SepConv(shortcut) ==> [lif+SepConv+BN]x2(shortcut) ==> x
 
     Attributes:
         full (bool): FullRepConv or RepConv for the first convolution layer, full means full dims to conv.
     """
 
-    def __init__(self, in_channels, mlp_ratio=4.0, sep_kernel_size=7, full=False):
+    def __init__(
+        self, in_channels, mlp_ratio=4.0, sep_kernel_size=7, full=False, **kwargs
+    ):
         super().__init__()
 
         self.full = full
         self.conv = SepConv(
-            dim=in_channels, expansion_ratio=2, kernel_size=sep_kernel_size
+            in_channels=in_channels, expansion_ratio=2, kernel_size=sep_kernel_size
         )
         self.mlp_ratio = mlp_ratio
         self.hidden_channel = int(in_channels * mlp_ratio)
@@ -376,7 +398,7 @@ class MS_ConvBlock(BaseModule):
 class MetaSDSA(BaseModule):
     def __init__(
         self,
-        dim,
+        in_channels,
         num_heads=8,
         qkv_bias=False,
         qk_scale=None,
@@ -390,15 +412,17 @@ class MetaSDSA(BaseModule):
     ):
         super().__init__()
         assert (
-            dim % num_heads == 0
-        ), f"dim {dim} should be divided by num_heads {num_heads}."
-        self.dim = dim
+            in_channels % num_heads == 0
+        ), f"dim {in_channels} should be divided by num_heads {num_heads}."
+        self.dim = in_channels
         self.dvs = dvs
         self.num_heads = num_heads
         # self.pool = Erode()
         self.qkv_conv = nn.Sequential(
-            RepConv(in_channel=dim, out_channel=dim * 2, kernel_size=3),
-            nn.BatchNorm2d(dim * 2),
+            RepConv(
+                in_channels=in_channels, out_channel=in_channels * 2, kernel_size=3
+            ),
+            nn.BatchNorm2d(in_channels * 2),
         )
         self.register_parameter(
             "scale", nn.Parameter(torch.tensor([0.0]))  # type:ignore
@@ -408,7 +432,9 @@ class MetaSDSA(BaseModule):
         self.proj_lif = LIFNeuron(spike_mode=spike_mode)
         self.talking_heads_lif = LIFNeuron(v_threshold=0.5, spike_mode=spike_mode)
         self.shortcut_lif = LIFNeuron(spike_mode=spike_mode)
-        self.proj_conv = nn.Sequential(RepConv(dim, dim), nn.BatchNorm2d(dim))
+        self.proj_conv = nn.Sequential(
+            RepConv(in_channels, in_channels), nn.BatchNorm2d(in_channels)
+        )
 
         self.mode = mode
         self.layer = layer
@@ -501,7 +527,7 @@ class MS_MLP_SMT(BaseModule):
 class MS_Block(BaseModule):
     def __init__(
         self,
-        dim,
+        in_channels,
         num_heads,
         mlp_ratio=4.0,
         qkv_bias=False,
@@ -511,11 +537,12 @@ class MS_Block(BaseModule):
         drop_path=0.0,
         norm_layer=nn.LayerNorm,
         sr_ratio=1,
+        **kwargs,
     ):
         super().__init__()
 
         self.attn = MetaSDSA(
-            dim,
+            in_channels,
             num_heads=num_heads,
             qkv_bias=qkv_bias,
             qk_scale=qk_scale,
@@ -524,7 +551,7 @@ class MS_Block(BaseModule):
             sr_ratio=sr_ratio,
         )
 
-        self.conv = SpikeConv(dim, dim)
+        self.conv = SpikeConv(in_channels, in_channels)
 
         # self.attn = MS_Attention_RepConv(
         #     dim,
@@ -536,9 +563,9 @@ class MS_Block(BaseModule):
         #     sr_ratio=sr_ratio)
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
-        mlp_hidden_dim = int(dim * mlp_ratio)
+        mlp_hidden_dim = int(in_channels * mlp_ratio)
         self.mlp = MS_MLP_SMT(
-            in_features=dim, hidden_features=mlp_hidden_dim, drop=drop
+            in_features=in_channels, hidden_features=mlp_hidden_dim, drop=drop
         )
 
     def forward(self, x):
@@ -550,12 +577,16 @@ class MS_Block(BaseModule):
 
 class SpikeSPPF(BaseModule):
     # Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher
-    def __init__(self, c1, c2, k=5):  # equivalent to SPP(k=(5, 9, 13))
+    def __init__(
+        self, in_channels, out_channels, kernal_size=5, **kwargs
+    ):  # equivalent to SPP(k=(5, 9, 13))
         super().__init__()
-        c_ = c1 // 2  # hidden channels
-        self.cv1 = SpikeConv(c1, c_, 1, 1)
-        self.cv2 = SpikeConv(c_ * 4, c2, 1, 1)
-        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        c_ = in_channels // 2  # hidden channels
+        self.cv1 = SpikeConv(in_channels, c_, 1, 1)
+        self.cv2 = SpikeConv(c_ * 4, out_channels, 1, 1)
+        self.m = nn.MaxPool2d(
+            kernel_size=kernal_size, stride=1, padding=kernal_size // 2
+        )
 
     def forward(self, x):
         x = self.cv1(x)
