@@ -1,17 +1,14 @@
-from typing import Literal
-from numpy import block
+from typing import List, Literal, Optional
+import torch
 import torch.nn as nn
-import torch.utils.checkpoint as cp
-from mmcv.cnn import build_conv_layer, build_norm_layer, build_plugin_layer
 from mmengine.model import BaseModule
-from torch.nn.modules.batchnorm import _BatchNorm
-
 from mmdet.registry import MODELS
 from ..utils import make_divisible
 from ..layers import (
     MS_GetT,
     MS_CancelT,
     MS_ConvBlock,
+    MS_AllConvBlock,
     MS_Block,
     MS_DownSampling,
     SpikeSPPF,
@@ -28,29 +25,29 @@ class SpikeYOLOBackbone(BaseModule):
     """
 
     arch_settings = {
-        "layers": [1, 1, 2, 1, 2, 1, 8, 1, 1, 1],
+        "layer_repeat": [1, 1, 3, 1, 6, 1, 9, 1, 1, 1],
         "args": [
             [3, 3],  # MS_GetT
             [3, 128, 7, 4, 2],  # MS_DownSampling
-            [128, 128],  # MS_ConvBlock
+            [128, 128, 7, 4],  # MS_AllConvBlock
             [128, 256, 3, 2, 1],  # MS_DownSampling
-            [256, 256, 3, 2, 1],  # MS_ConvBlock (P3)
+            [256, 256, 7, 4],  # MS_AllConvBlock (P3)
             [256, 512, 3, 2, 1],  # MS_DownSampling
-            [512, 512],  # MS_Block (P4)
+            [512, 512, 7, 3],  # MS_ConvBlock (P4)
             [512, 1024, 3, 2, 1],  # MS_DownSampling
-            [1024, 1024],  # MS_Block
+            [1024, 1024, 7, 2],  # MS_ConvBlock
             [1024, 1024],  # SpikeSPPF
         ],
         "layer_names": [
             "MS_GetT",
             "MS_DownSampling",
-            "MS_ConvBlock",
+            "MS_AllConvBlock",
+            "MS_DownSampling",
+            "MS_AllConvBlock",
             "MS_DownSampling",
             "MS_ConvBlock",
             "MS_DownSampling",
-            "MS_Block",
-            "MS_DownSampling",
-            "MS_Block",
+            "MS_ConvBlock",
             "SpikeSPPF",
         ],
     }
@@ -66,15 +63,17 @@ class SpikeYOLOBackbone(BaseModule):
     def __init__(
         self,
         scale: str = "l",
-        out_indices: tuple = None,
+        out_indices: List[int] = [4, 6, 9],
         T: int = 4,
-        mlp_ratio: int = 4,
-        num_heads: int = 8,
         full: bool = False,
+        init_cfg: dict = None,
     ):
+
+        super(SpikeYOLOBackbone, self).__init__(init_cfg)
         self.blocks = []
         self.layer_names = self.arch_settings["layer_names"]
         self.args = self.arch_settings["args"]
+        self.layer_repeat = self.arch_settings["layer_repeat"]
         self.out_indices = out_indices
         self.scale = scale
         self.first_layer = True
@@ -84,30 +83,39 @@ class SpikeYOLOBackbone(BaseModule):
 
         layer_args = {
             "T": T,
-            "mlp_ratio": mlp_ratio,
-            "num_heads": num_heads,
             "full": full,
         }
         for i, layer_name in enumerate(self.layer_names):
-            self.add_module(layer_name, self.make_layer(i, layer_args, layer_name))
-            self.blocks.append(layer_name)
+            module_name = layer_name + f"{i}"
+            self.add_module(
+                module_name,
+                self.make_layer(i, layer_args, self.layer_repeat[i], layer_name),
+            )
+            self.blocks.append(module_name)
 
     def make_layer(
         self,
         layer_id: int,
         layer_args: dict,
+        layer_repeat: int,
         layer_name: Literal[
-            "MS_GetT", "MS_DownSampling", "MS_ConvBlock", "MS_Block", "SpikeSPPF"
+            "MS_GetT", "MS_DownSampling", "MS_ConvBlock", "MS_AllConvBlock", "SpikeSPPF"
         ],
     ) -> BaseModule:
         args = {
             "in_channels": self.args[layer_id][0],
             "out_channels": self.args[layer_id][1],
         }
-        if len(self.args[layer_id]) > 2:
+        # downsampling parameters
+        if len(self.args[layer_id]) == 5:
             args["kernel_size"] = self.args[layer_id][2]
             args["stride"] = self.args[layer_id][3]
             args["padding"] = self.args[layer_id][4]
+
+        # ConvBlock parameters
+        if len(self.args[layer_id]) == 4:
+            args["sep_kernel_size"] = self.args[layer_id][2]
+            args["mlp_ratio"] = self.args[layer_id][3]
 
         layer_args.update(args)
         if layer_name == "MS_DownSampling":
@@ -116,7 +124,12 @@ class SpikeYOLOBackbone(BaseModule):
                 self.first_layer = False
 
         module = globals()[layer_name]
-        return module(**layer_args)
+
+        return (
+            (nn.Sequential(*(module(**layer_args) for _ in range(layer_repeat))))
+            if layer_repeat > 1
+            else module(**layer_args)
+        )
 
     def update_layer_args(self):
         self.depth, self.width, self.max_channels = self.scales[self.scale]
@@ -124,8 +137,9 @@ class SpikeYOLOBackbone(BaseModule):
         for i, layer_name in enumerate(self.layer_names):
             if i > 0:
                 self.args[i][0] = self.args[i - 1][1]
-            in_channels, out_channels = self.args[i]
+            out_channels = self.args[i][1]
 
+            # calculate output channels
             if layer_name == "SpikeSPPF":
                 out_channels = make_divisible(
                     min(out_channels, self.max_channels) * self.width, 8
@@ -133,7 +147,15 @@ class SpikeYOLOBackbone(BaseModule):
             elif layer_name == "MS_DownSampling":
                 out_channels = int(out_channels * self.width)
 
-            self.args[i][1] = out_channels
+            # update output channels
+            if layer_name == "MS_ConvBlock" or layer_name == "MS_AllConvBlock":
+                self.args[i][1] = self.args[i][0]
+            else:
+                self.args[i][1] = out_channels
+
+            # update repeat times
+            n = self.layer_repeat[i]
+            self.layer_repeat[i] = max(round(n * self.depth), 1) if n > 1 else n
 
     def forward(self, x):
         outs = []
