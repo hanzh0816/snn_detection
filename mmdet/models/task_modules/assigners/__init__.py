@@ -19,6 +19,7 @@ from .sim_ota_assigner import SimOTAAssigner
 from .task_aligned_assigner import TaskAlignedAssigner
 from .topk_hungarian_assigner import TopkHungarianAssigner
 from .uniform_assigner import UniformAssigner
+from .batch_task_aligned_assigner import BatchTaskAlignedAssigner
 
 __all__ = [
     'BaseAssigner', 'BinaryFocalLossCost', 'MaxIoUAssigner',
@@ -28,5 +29,5 @@ __all__ = [
     'TaskAlignedAssigner', 'TopkHungarianAssigner', 'BBoxL1Cost',
     'ClassificationCost', 'CrossEntropyLossCost', 'DiceCost', 'FocalLossCost',
     'IoUCost', 'BboxOverlaps2D', 'DynamicSoftLabelAssigner',
-    'MultiInstanceAssigner', 'BboxOverlaps2D_GLIP'
+    'MultiInstanceAssigner', 'BboxOverlaps2D_GLIP','BatchTaskAlignedAssigner'
 ]
