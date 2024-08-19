@@ -197,6 +197,21 @@ model = dict(
     bbox_head=dict(
         type="SpikeYOLOHead",
         scale=scale,
+        loss_cls=dict(
+            type="CrossEntropyLoss",
+            use_sigmoid=True,
+            reduction="none",
+            loss_weight=0.5,
+        ),
+        loss_bbox=dict(
+            type="YOLOv8IoULoss",
+            iou_mode="ciou",
+            bbox_format="xyxy",
+            reduction="sum",
+            loss_weight=7.5,
+            return_iou=False,
+        ),
+        loss_dfl=dict(type="DistributionFocalLoss", reduction="mean", loss_weight=1.5 / 4),
     ),
     train_cfg=model_train_cfg,
     test_cfg=model_test_cfg,
@@ -209,3 +224,4 @@ custom_hooks = [
     dict(type="YOLOXModeSwitchHook", num_last_epochs=num_last_epochs, priority=48),
     dict(type="SpikeResetHook"),
 ]
+default_hooks = dict(checkpoint=dict(type="CheckpointHook", max_keep_ckpts=3, save_best="auto"))
