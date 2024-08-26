@@ -51,7 +51,7 @@ class LIFNeuron(BaseModule):
         v_threshold: float = 0.0,
         v_reset: float = 0.0,
         detach_reset: bool = True,
-        backend: str = "torch",
+        backend: Literal["torch", "cupy"] = "torch",
     ):
         super().__init__()
         if spike_mode == "lif":
@@ -96,17 +96,13 @@ class BNAndPadLayer(BaseModule):
         track_running_stats=True,
     ):
         super(BNAndPadLayer, self).__init__()
-        self.bn = nn.BatchNorm2d(
-            num_features, eps, momentum, affine, track_running_stats
-        )
+        self.bn = nn.BatchNorm2d(num_features, eps, momentum, affine, track_running_stats)
         self.pad_pixels = pad_pixels
 
     def forward(self, input):
         output = self.bn(input)
         if self.pad_pixels > 0:
-            assert (self.bn.running_mean is not None) and (
-                self.bn.running_var is not None
-            )
+            assert (self.bn.running_mean is not None) and (self.bn.running_var is not None)
             if self.bn.affine:
                 pad_values = (
                     self.bn.bias.detach()
@@ -115,9 +111,7 @@ class BNAndPadLayer(BaseModule):
                     / torch.sqrt(self.bn.running_var + self.bn.eps)
                 )
             else:
-                pad_values = -self.bn.running_mean / torch.sqrt(
-                    self.bn.running_var + self.bn.eps
-                )
+                pad_values = -self.bn.running_mean / torch.sqrt(self.bn.running_var + self.bn.eps)
 
             output = F.pad(output, [self.pad_pixels] * 4)
             pad_values = pad_values.view(1, -1, 1, 1)
@@ -208,6 +202,8 @@ class MS_DownSampling(BaseModule):
         stride=2,
         padding=1,
         first_layer=True,
+        spike_mode="lif",
+        lif_backend="torch",
         **kwargs,
     ):
         super().__init__()
@@ -222,7 +218,7 @@ class MS_DownSampling(BaseModule):
         self.first_layer = first_layer
         self.encode_bn = nn.BatchNorm2d(out_channels)
         if not first_layer:
-            self.encode_lif = LIFNeuron(spike_mode="lif")
+            self.encode_lif = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         T, B, _, _, _ = x.shape
@@ -249,16 +245,16 @@ class SepConv(BaseModule):
         bias=False,
         kernel_size=3,  # 7,3
         padding=1,
+        spike_mode="lif",
+        lif_backend="torch",
     ):
         super().__init__()
         padding = int((kernel_size - 1) / 2)
         med_channels = int(expansion_ratio * in_channels)
-        self.lif1 = LIFNeuron()
-        self.pwconv1 = nn.Conv2d(
-            in_channels, med_channels, kernel_size=1, stride=1, bias=bias
-        )
+        self.lif1 = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
+        self.pwconv1 = nn.Conv2d(in_channels, med_channels, kernel_size=1, stride=1, bias=bias)
         self.bn1 = nn.BatchNorm2d(med_channels)
-        self.lif2 = LIFNeuron()
+        self.lif2 = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
         self.dwconv = nn.Conv2d(
             med_channels,
             med_channels,
@@ -290,9 +286,7 @@ class RepConv(BaseModule):
         full: whether to use all dims to conv.
     """
 
-    def __init__(
-        self, in_channels, out_channel, kernel_size=3, full=True, bias=False, groups=1
-    ):
+    def __init__(self, in_channels, out_channel, kernel_size=3, full=True, bias=False, groups=1):
         super().__init__()
         padding = int((kernel_size - 1) / 2)
         conv1x1 = nn.Conv2d(in_channels, in_channels, 1, 1, 0, bias=bias, groups=groups)
@@ -338,6 +332,8 @@ class SpikeConv(BaseModule):
         padding=None,
         groups=1,
         dilation=1,
+        spike_mode="lif",
+        lif_backend="torch",
         **kwargs,  # bn_flag: w/ BN or not
     ):
         super().__init__()
@@ -352,7 +348,7 @@ class SpikeConv(BaseModule):
             dilation=dilation,
             bias=False,
         )
-        self.lif = LIFNeuron(spike_mode="lif")
+        self.lif = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
         self.bn_flag = kwargs.get("bn_flag", True)
         if self.bn_flag:
             self.bn = nn.BatchNorm2d(out_channels)
@@ -380,19 +376,30 @@ class MS_ConvBlock(BaseModule):
     """
 
     def __init__(
-        self, in_channels, mlp_ratio=4.0, sep_kernel_size=7, full=False, **kwargs
+        self,
+        in_channels,
+        mlp_ratio=4.0,
+        sep_kernel_size=7,
+        full=False,
+        spike_mode="lif",
+        lif_backend="torch",
+        **kwargs,
     ):
         super().__init__()
 
         self.full = full
         self.conv = SepConv(
-            in_channels=in_channels, expansion_ratio=2, kernel_size=sep_kernel_size
+            in_channels=in_channels,
+            expansion_ratio=2,
+            kernel_size=sep_kernel_size,
+            spike_mode=spike_mode,
+            lif_backend=lif_backend,
         )
         self.mlp_ratio = mlp_ratio
         self.hidden_channels = int(in_channels * mlp_ratio)
 
-        self.lif1 = LIFNeuron()
-        self.lif2 = LIFNeuron()
+        self.lif1 = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
+        self.lif2 = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
 
         self.conv1 = RepConv(in_channels, self.hidden_channels, full=full, groups=4)
         self.bn1 = nn.BatchNorm2d(self.hidden_channels)
@@ -427,10 +434,22 @@ class MS_AllConvBlock(BaseModule):
     """
 
     def __init__(
-        self, in_channels, mlp_ratio=4.0, sep_kernel_size=7, groups=4, **kwargs
+        self,
+        in_channels,
+        mlp_ratio=4.0,
+        sep_kernel_size=7,
+        groups=4,
+        spike_mode="lif",
+        lif_backend="torch",
+        **kwargs,
     ):
         super().__init__()
-        self.Conv = SepConv(in_channels=in_channels, kernel_size=sep_kernel_size)
+        self.Conv = SepConv(
+            in_channels=in_channels,
+            kernel_size=sep_kernel_size,
+            spike_mode=spike_mode,
+            lif_backend=lif_backend,
+        )
         self.mlp_ratio = mlp_ratio
         self.hidden_channels = int(in_channels * mlp_ratio)
 
@@ -439,10 +458,16 @@ class MS_AllConvBlock(BaseModule):
             out_channels=self.hidden_channels,
             kernal_size=3,
             groups=groups,
+            spike_mode=spike_mode,
+            lif_backend=lif_backend,
         )
 
         self.conv2 = SpikeConv(
-            in_channels=self.hidden_channels, out_channels=in_channels, kernal_size=3
+            in_channels=self.hidden_channels,
+            out_channels=in_channels,
+            kernal_size=3,
+            spike_mode=spike_mode,
+            lif_backend=lif_backend,
         )
 
     def forward(self, x):
@@ -467,6 +492,8 @@ class MS_Block(BaseModule):
         drop_path=0.0,
         norm_layer=nn.LayerNorm,
         sr_ratio=1,
+        spike_mode="lif",
+        lif_backend="torch",
         **kwargs,
     ):
         super().__init__()
@@ -479,9 +506,16 @@ class MS_Block(BaseModule):
             attn_drop=attn_drop,
             proj_drop=drop,
             sr_ratio=sr_ratio,
+            spike_mode=spike_mode,
+            lif_backend=lif_backend,
         )
 
-        self.conv = SpikeConv(in_channels, in_channels)
+        self.conv = SpikeConv(
+            in_channels,
+            in_channels,
+            spike_mode=spike_mode,
+            lif_backend=lif_backend,
+        )
 
         # self.attn = MS_Attention_RepConv(
         #     dim,
@@ -495,7 +529,11 @@ class MS_Block(BaseModule):
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         mlp_hidden_dim = int(in_channels * mlp_ratio)
         self.mlp = MS_MLP_SMT(
-            in_features=in_channels, hidden_features=mlp_hidden_dim, drop=drop
+            in_features=in_channels,
+            hidden_features=mlp_hidden_dim,
+            drop=drop,
+            spike_mode=spike_mode,
+            lif_backend=lif_backend,
         )
 
     def forward(self, x):
@@ -508,15 +546,33 @@ class MS_Block(BaseModule):
 class SpikeSPPF(BaseModule):
     # Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher
     def __init__(
-        self, in_channels, out_channels, kernal_size=5, **kwargs
+        self,
+        in_channels,
+        out_channels,
+        kernal_size=5,
+        spike_mode="lif",
+        lif_backend="torch",
+        **kwargs,
     ):  # equivalent to SPP(k=(5, 9, 13))
         super().__init__()
         c_ = in_channels // 2  # hidden channels
-        self.cv1 = SpikeConv(in_channels, c_, 1, 1)
-        self.cv2 = SpikeConv(c_ * 4, out_channels, 1, 1)
-        self.m = nn.MaxPool2d(
-            kernel_size=kernal_size, stride=1, padding=kernal_size // 2
+        self.cv1 = SpikeConv(
+            in_channels,
+            c_,
+            1,
+            1,
+            spike_mode=spike_mode,
+            lif_backend=lif_backend,
         )
+        self.cv2 = SpikeConv(
+            c_ * 4,
+            out_channels,
+            1,
+            1,
+            spike_mode=spike_mode,
+            lif_backend=lif_backend,
+        )
+        self.m = nn.MaxPool2d(kernel_size=kernal_size, stride=1, padding=kernal_size // 2)
 
     def forward(self, x):
         x = self.cv1(x)
@@ -541,6 +597,7 @@ class MetaSDSA(BaseModule):
         sr_ratio=1,
         mode="direct_xor",
         spike_mode: Literal["lif", "plif"] = "lif",
+        lif_backend: str = "torch",
         dvs=False,
         layer=0,
     ):
@@ -553,19 +610,19 @@ class MetaSDSA(BaseModule):
         self.num_heads = num_heads
         # self.pool = Erode()
         self.qkv_conv = nn.Sequential(
-            RepConv(
-                in_channels=in_channels, out_channel=in_channels * 2, kernel_size=3
-            ),
+            RepConv(in_channels=in_channels, out_channel=in_channels * 2, kernel_size=3),
             nn.BatchNorm2d(in_channels * 2),
         )
         self.register_parameter(
             "scale", nn.Parameter(torch.tensor([0.0]))  # type:ignore
         )
-        self.qk_lif = LIFNeuron(spike_mode=spike_mode)
-        self.v_lif = LIFNeuron(spike_mode=spike_mode)
-        self.proj_lif = LIFNeuron(spike_mode=spike_mode)
-        self.talking_heads_lif = LIFNeuron(v_threshold=0.5, spike_mode=spike_mode)
-        self.shortcut_lif = LIFNeuron(spike_mode=spike_mode)
+        self.qk_lif = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
+        self.v_lif = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
+        self.proj_lif = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
+        self.talking_heads_lif = LIFNeuron(
+            v_threshold=0.5, spike_mode=spike_mode, backend=lif_backend
+        )
+        self.shortcut_lif = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
         self.proj_conv = nn.Sequential(
             RepConv(in_channels, in_channels), nn.BatchNorm2d(in_channels)
         )
@@ -573,9 +630,7 @@ class MetaSDSA(BaseModule):
         self.mode = mode
         self.layer = layer
 
-    def forward(
-        self, x, hook=None
-    ):  # 这里本质上只是用了transformer的算子，而没有切片等操作
+    def forward(self, x, hook=None):  # 这里本质上只是用了transformer的算子，而没有切片等操作
         T, B, C, H, W = x.shape
         identity = x
 
@@ -617,25 +672,30 @@ class MetaSDSA(BaseModule):
 
 class MS_MLP_SMT(BaseModule):
     def __init__(
-        self, in_features, hidden_features=None, out_features=None, drop=0.0, layer=0
+        self,
+        in_features,
+        hidden_features=None,
+        out_features=None,
+        drop=0.0,
+        layer=0,
+        spike_mode="lif",
+        lif_backend="torch",
     ):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
         self.fc1_conv = nn.Conv1d(in_features, hidden_features, kernel_size=1, stride=1)
         self.fc1_bn = nn.BatchNorm1d(hidden_features)
-        self.fc1_lif = LIFNeuron(spike_mode="lif")
+        self.fc1_lif = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
 
-        self.dw_lif = LIFNeuron(spike_mode="lif")
+        self.dw_lif = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
         self.dwconv = nn.Conv2d(
             hidden_features, hidden_features, 3, 1, 1, bias=True, groups=hidden_features
         )
 
-        self.fc2_conv = nn.Conv1d(
-            hidden_features, out_features, kernel_size=1, stride=1
-        )
+        self.fc2_conv = nn.Conv1d(hidden_features, out_features, kernel_size=1, stride=1)
         self.fc2_bn = nn.BatchNorm1d(out_features)
-        self.fc2_lif = LIFNeuron(spike_mode="lif")
+        self.fc2_lif = LIFNeuron(spike_mode=spike_mode, backend=lif_backend)
 
         self.c_hidden = hidden_features
         self.c_output = out_features

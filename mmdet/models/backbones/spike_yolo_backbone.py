@@ -65,6 +65,8 @@ class SpikeYOLOBackbone(BaseModule):
         scale: str = "l",
         out_indices: List[int] = [4, 6, 9],
         T: int = 4,
+        spike_mode: str = "lif",
+        lif_backend: str = "torch",
         full: bool = False,
         init_cfg: dict = None,
     ):
@@ -83,6 +85,8 @@ class SpikeYOLOBackbone(BaseModule):
 
         layer_args = {
             "T": T,
+            "spike_mode": spike_mode,
+            "lif_backend": lif_backend,
             "full": full,
         }
         for i, layer_name in enumerate(self.layer_names):
@@ -141,9 +145,7 @@ class SpikeYOLOBackbone(BaseModule):
 
             # calculate output channels
             if layer_name == "SpikeSPPF":
-                out_channels = make_divisible(
-                    min(out_channels, self.max_channels) * self.width, 8
-                )
+                out_channels = make_divisible(min(out_channels, self.max_channels) * self.width, 8)
             elif layer_name == "MS_DownSampling":
                 out_channels = int(out_channels * self.width)
 

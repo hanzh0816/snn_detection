@@ -71,6 +71,8 @@ class SpikeYOLONeck(BaseModule):
         out_indices: List[int] = [9, 11, 15],
         full: bool = False,
         init_cfg: dict = None,
+        spike_mode: str = "lif",
+        lif_backend: str = "torch",
     ):
         super(SpikeYOLONeck, self).__init__(init_cfg)
         self.blocks = []
@@ -83,6 +85,8 @@ class SpikeYOLONeck(BaseModule):
 
         self.update_layer_args()
         layer_args = {
+            "spike_mode": spike_mode,
+            "lif_backend": lif_backend,
             "full": full,
         }
         for i, layer_name in enumerate(self.layer_names):
@@ -98,9 +102,7 @@ class SpikeYOLONeck(BaseModule):
             return Concat(dimension=self.args[layer_id][1])
 
         if layer_name == "Upsample":
-            return nn.Upsample(
-                scale_factor=self.args[layer_id][0], mode=self.args[layer_id][1]
-            )
+            return nn.Upsample(scale_factor=self.args[layer_id][0], mode=self.args[layer_id][1])
 
         args = {
             "in_channels": self.args[layer_id][0],
@@ -160,9 +162,7 @@ class SpikeYOLONeck(BaseModule):
                 # 分类讨论与Backbone连接还是与neck连接
                 if concat_layer_id < 0:
                     assert self.backbone_out_channels[concat_layer_id] == out_channels
-                    out_channels = (
-                        self.backbone_out_channels[concat_layer_id] + out_channels
-                    )
+                    out_channels = self.backbone_out_channels[concat_layer_id] + out_channels
                 else:
                     assert self.in_channels[concat_layer_id] == out_channels
                     out_channels = self.in_channels[concat_layer_id] + out_channels
