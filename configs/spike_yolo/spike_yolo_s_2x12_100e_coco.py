@@ -114,8 +114,9 @@ train_dataset = dict(
 )
 train_dataloader = dict(
     batch_size=batch_size,
-    num_workers=4,
+    num_workers=8,
     persistent_workers=True,
+    pin_memory=True,
     sampler=dict(type="DefaultSampler", shuffle=True),
     dataset=train_dataset,
 )
