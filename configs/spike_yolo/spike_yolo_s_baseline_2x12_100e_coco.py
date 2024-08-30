@@ -6,8 +6,8 @@ _base_ = [
 # training settings
 max_epochs = 100
 num_last_epochs = 15
-end_warmup_epoch = 10
-interval = 10
+end_warmup_epoch = 2
+interval = 5
 
 # runtime settings
 train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=max_epochs, val_interval=interval)
@@ -19,11 +19,13 @@ test_cfg = dict(type="TestLoop")
 base_lr = 0.01
 auto_scale_lr = dict(enable=True, base_batch_size=16)
 weight_decay = 5e-4
+momentum = 0.9
 
 optim_wrapper = dict(
     type="OptimWrapper",
-    optimizer=dict(type="SGD", lr=base_lr, momentum=0.9, weight_decay=5e-4, nesterov=True),
-    paramwise_cfg=dict(norm_decay_mult=0.0, bias_decay_mult=0.0),
+    optimizer=dict(
+        type="SGD", lr=base_lr, momentum=momentum, weight_decay=weight_decay, nesterov=True
+    ),
 )
 # learning rate scheduler
 param_scheduler = [
@@ -174,6 +176,7 @@ model_train_cfg = dict(
         eps=1e-9,
     )
 )
+
 model_test_cfg = dict(
     # The config of multi-label for multi-class prediction.
     multi_label=True,
@@ -183,6 +186,8 @@ model_test_cfg = dict(
     nms=dict(type="nms", iou_threshold=0.65),  # NMS type and threshold
     max_per_img=300,
 )  # Max number of detections of each image
+
+init_cfg = dict(type="Kaiming", layer=["Conv2d", "Linear"], distribution="uniform")
 
 model = dict(
     type="SpikeYOLO",
@@ -216,6 +221,7 @@ model = dict(
     ),
     train_cfg=model_train_cfg,
     test_cfg=model_test_cfg,
+    init_cfg=init_cfg,
 )
 
 # ================================================================================================
@@ -226,3 +232,9 @@ custom_hooks = [
     dict(type="SpikeResetHook"),
 ]
 default_hooks = dict(checkpoint=dict(type="CheckpointHook", max_keep_ckpts=3, save_best="auto"))
+
+
+# ================================================================================================
+# other settings
+
+randomness = dict(seed=41, diff_rank_seed=True)
