@@ -23,7 +23,7 @@ momentum = 0.9
 
 optim_wrapper = dict(
     type="AmpOptimWrapper",
-    dtype='bfloat16', # 使用bfloat16数据类型
+    # dtype='bfloat16', # 使用bfloat16数据类型
     optimizer=dict(
         type="SGD", lr=base_lr, momentum=momentum, weight_decay=weight_decay, nesterov=True
     ),
@@ -188,6 +188,8 @@ model_test_cfg = dict(
     max_per_img=300,
 )  # Max number of detections of each image
 
+init_cfg = [dict(type="Kaiming", layer="Conv2d"), dict(type="Xavier", layer="Linear")]
+
 model = dict(
     type="SpikeYOLO",
     data_preprocessor=dict(
@@ -220,6 +222,7 @@ model = dict(
     ),
     train_cfg=model_train_cfg,
     test_cfg=model_test_cfg,
+    init_cfg=init_cfg,
 )
 
 # ================================================================================================
@@ -235,3 +238,12 @@ default_hooks = dict(checkpoint=dict(type="CheckpointHook", max_keep_ckpts=3, sa
 # other settings
 
 randomness = dict(seed=41, diff_rank_seed=True)
+
+vis_backends = [
+    dict(type="LocalVisBackend"),
+    dict(
+        type="WandbVisBackend",
+        init_kwargs=dict(project="snn_detection", name="spike_yolo_m_baseline"),
+    ),
+]
+visualizer = dict(vis_backends=vis_backends)
