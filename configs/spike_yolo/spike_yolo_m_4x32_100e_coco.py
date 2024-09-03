@@ -1,5 +1,5 @@
 _base_ = [
-    "spike_yolo_m_baseline_2x5_100e_coco.py",
+    "spike_yolo_m_baseline_2x8_100e_coco.py",
 ]
 
 batch_size = 32

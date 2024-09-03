@@ -16,7 +16,7 @@ test_cfg = dict(type="TestLoop")
 
 # optimizer
 # default lr: 8 gpus x 2 sample = 16
-base_lr = 0.01
+base_lr = 1e-4
 auto_scale_lr = dict(enable=True, base_batch_size=16)
 weight_decay = 5e-4
 momentum = 0.9
@@ -65,55 +65,37 @@ param_scheduler = [
 
 data_root = "data/coco/"
 dataset_type = "CocoDataset"
-batch_size = 5
+batch_size = 8
 img_scale = (320, 320)
 backend_args = None
 
 # train data settings
-train_pipeline = [
-    dict(type="Mosaic", img_scale=img_scale, pad_val=114.0),
-    dict(
-        type="RandomAffine",
-        scaling_ratio_range=(0.1, 2),
-        # img_scale is (width, height)
-        border=(-img_scale[0] // 2, -img_scale[1] // 2),
-    ),
-    dict(type="MixUp", img_scale=img_scale, ratio_range=(0.8, 1.6), pad_val=114.0),
-    dict(type="YOLOXHSVRandomAug"),
-    dict(type="RandomFlip", prob=0.5),
-    # According to the official implementation, multi-scale
-    # training is not considered here but in the
-    # 'mmdet/models/detectors/yolox.py'.
-    # Resize and Pad are for the last 15 epochs when Mosaic,
-    # RandomAffine, and MixUp are closed by YOLOXModeSwitchHook.
+pre_transform = [
+    dict(type="LoadImageFromFile", backend_args=backend_args),
+    dict(type="LoadAnnotations", with_bbox=True),
     dict(type="Resize", scale=img_scale, keep_ratio=True),
+    dict(type="Pad", pad_to_square=True, pad_val=dict(img=(114.0, 114.0, 114.0))),
+]
+
+last_transform = [
     dict(
-        type="Pad",
-        pad_to_square=True,
-        # If the image is three-channel, the pad value needs
-        # to be set separately for each channel.
-        pad_val=dict(img=(114.0, 114.0, 114.0)),
+        type="mmdet.PackDetInputs",
+        meta_keys=("img_id", "img_path", "ori_shape", "img_shape", "scale_factor"),
     ),
-    dict(type="FilterAnnotations", min_gt_bbox_wh=(1, 1), keep_empty=False),
-    dict(type="PackDetInputs"),
+]
+train_pipeline = [
+    *pre_transform,
+    *last_transform,
 ]
 
 train_dataset = dict(
-    # use MultiImageMixDataset wrapper to support mosaic and mixup
-    type="MultiImageMixDataset",
-    dataset=dict(
-        type=dataset_type,
-        data_root=data_root,
-        ann_file="annotations/instances_train2017.json",
-        data_prefix=dict(img="train2017/"),
-        pipeline=[
-            dict(type="LoadImageFromFile", backend_args=backend_args),
-            dict(type="LoadAnnotations", with_bbox=True),
-        ],
-        filter_cfg=dict(filter_empty_gt=False, min_size=32),
-        backend_args=backend_args,
-    ),
+    type=dataset_type,
+    data_root=data_root,
+    ann_file="annotations/instances_train2017.json",
+    data_prefix=dict(img="train2017/"),
     pipeline=train_pipeline,
+    filter_cfg=dict(filter_empty_gt=False, min_size=32),
+    backend_args=backend_args,
 )
 train_dataloader = dict(
     batch_size=batch_size,
@@ -218,7 +200,7 @@ model = dict(
             loss_weight=7.5,
             return_iou=False,
         ),
-        loss_dfl=dict(type="DistributionFocalLoss", reduction="mean", loss_weight=1.5),
+        loss_dfl=dict(type="DistributionFocalLoss", reduction="mean", loss_weight=1.5 / 4),
     ),
     train_cfg=model_train_cfg,
     test_cfg=model_test_cfg,
@@ -229,7 +211,6 @@ model = dict(
 # hook settings
 
 custom_hooks = [
-    dict(type="YOLOXModeSwitchHook", num_last_epochs=num_last_epochs, priority=48),
     dict(type="SpikeResetHook"),
 ]
 default_hooks = dict(checkpoint=dict(type="CheckpointHook", max_keep_ckpts=3, save_best="auto"))
@@ -238,12 +219,3 @@ default_hooks = dict(checkpoint=dict(type="CheckpointHook", max_keep_ckpts=3, sa
 # other settings
 
 randomness = dict(seed=41, diff_rank_seed=True)
-
-vis_backends = [
-    dict(type="LocalVisBackend"),
-    dict(
-        type="WandbVisBackend",
-        init_kwargs=dict(project="snn_detection", name="spike_yolo_m_baseline"),
-    ),
-]
-visualizer = dict(vis_backends=vis_backends)
