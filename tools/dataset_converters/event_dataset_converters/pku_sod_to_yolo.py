@@ -13,6 +13,8 @@ import numpy as np
 from tqdm import tqdm
 from torch.utils.data import Dataset
 
+from matplotlib import pyplot as plt
+
 
 def create_labels(data):
 
@@ -85,9 +87,7 @@ def create_image(events, width, height, T):
                 x = events_list[:, 1]
                 y = events_list[:, 2]
                 p = events_list[:, 3]
-                assert x.max() < width, "out of bound events: x = {}, w = {}".format(
-                    x.max(), width
-                )
+                assert x.max() < width, "out of bound events: x = {}, w = {}".format(x.max(), width)
                 assert y.max() < height, "out of bound events: y = {}, h = {}".format(
                     y.max(), height
                 )
@@ -96,6 +96,30 @@ def create_image(events, width, height, T):
                     255 * p[:, None]
                 )  # img默认为灰度127，有正事件则为255，无正事件则为0
     return img  # numpy.ndarray[T,W,H，C]#255 -255 每个格子
+
+
+def display_image(img):
+    """
+    Display T images on a canvas.
+
+    Parameters:
+    images (numpy.ndarray): An array of shape (T, width, height, 3).
+    """
+    T, width, height, _ = img.shape
+    fig, axes = plt.subplots(1, T, figsize=(15, 5))
+
+    if T == 1:
+        axes = [axes]
+
+    for i, ax in enumerate(axes):
+        # Transpose each image from (width, height, 3) to (height, width, 3)
+        hwc_image = img[i].transpose(1, 0, 2)
+        ax.imshow(hwc_image)
+        ax.axis("off")
+        ax.set_title(f"Frame {i+1}")
+
+    plt.tight_layout()
+    plt.show()
 
 
 def create_one_sample(
@@ -159,7 +183,8 @@ def create_one_sample(
                     events_sample.append(corresponding_events)
 
                 img_data = create_image(events_sample, targets["w"], targets["h"], T)
-
+                display_image(img_data)
+                input("请输入指令以继续: ")
                 np.save(save_image_path, img_data)
                 np.savetxt(save_label_path, labels)
 
@@ -189,6 +214,17 @@ def build_dataset(raw_path, output_path, sample_size, T, task="train"):
         for fname in input_files:
             prefix = fname[:-7]
             input_aedat_file = os.path.join(input_path, scene, fname)
+            create_one_sample(
+                input_aedat_file,
+                raw_path,
+                output_path,
+                prefix,
+                scene,
+                sample_size,
+                T,
+                task,
+            )
+
             work_args.append(
                 (
                     input_aedat_file,
@@ -207,9 +243,9 @@ def build_dataset(raw_path, output_path, sample_size, T, task="train"):
 
 
 raw_path = "/data1/hzh/pku/PKU_DAVIS_SOD/"
-output_path = "/data/hzh/pku/"
-sample_size = 250000
-T = 5
+output_path = "/data1/hzh/pku/test"
+sample_size = 60000
+T = 4
 
 build_dataset(
     raw_path=raw_path,
