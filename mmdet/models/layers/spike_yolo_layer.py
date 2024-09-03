@@ -48,7 +48,7 @@ class LIFNeuron(BaseModule):
         self,
         spike_mode: Literal["lif", "plif"] = "lif",
         tau: float = 2.0,
-        v_threshold: float = 0.0,
+        v_threshold: float = 1.0,
         v_reset: float = 0.0,
         detach_reset: bool = True,
         backend: Literal["torch", "cupy"] = "torch",
