@@ -43,6 +43,7 @@ class LIFNeuron(BaseModule):
         v_reset: float = 0.0,
         detach_reset: bool = True,
         backend: Literal["torch", "cupy"] = "torch",
+        **kwargs,
     ):
         super().__init__()
         if spike_mode == "lif":
@@ -77,8 +78,12 @@ class Bottleneck(BaseModule):
         planes,
         stride=1,
         downsample=None,
-        spike_mode="lif",
-        spike_backend="torch",
+        spike_cfg=dict(
+            spike_mode="lif",
+            spike_backend="torch",
+            spike_T=4,
+        ),
+        **kwargs,
     ):
         super(Bottleneck, self).__init__()
         self.inplanes = inplanes
@@ -86,44 +91,38 @@ class Bottleneck(BaseModule):
         self.stride = stride
 
         # conv_layer 1
-        self.lif1 = LIFNeuron(spike_mode=spike_mode, backend=spike_backend)
-        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(planes)
+        self.lif1 = LIFNeuron(**spike_cfg)
+        self.layer1 = layer.SeqToANNContainer(
+            nn.Conv2d(inplanes, planes, kernel_size=1, bias=False),
+            nn.BatchNorm2d(planes),
+        )
 
         # conv_layer 2
-        self.lif2 = LIFNeuron(spike_mode=spike_mode, backend=spike_backend)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(planes)
+        self.lif2 = LIFNeuron(**spike_cfg)
+        self.layer2 = layer.SeqToANNContainer(
+            nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False),
+            nn.BatchNorm2d(planes),
+        )
 
         # conv_layer 3
-        self.lif3 = LIFNeuron(spike_mode=spike_mode, backend=spike_backend)
-        self.conv3 = nn.Conv2d(planes, planes * self.expansion, kernel_size=1, bias=False)
-        self.bn3 = nn.BatchNorm2d(planes * self.expansion)
+        self.lif3 = LIFNeuron(**spike_cfg)
+        self.layer3 = layer.SeqToANNContainer(
+            nn.Conv2d(planes, planes * self.expansion, kernel_size=1, bias=False),
+            nn.BatchNorm2d(planes * self.expansion),
+        )
 
         self.downsample = downsample
         self.stride = stride
 
     def forward(self, x):
         residual = x
-        T, B, C, H, W = x.shape
-        if self.stride != 1:
-            out_H, out_W = math.ceil(H / self.stride), math.ceil(W / self.stride)
-        else:
-            out_H, out_W = H, W
 
-        out = self.bn1(self.conv1(self.lif1(x).flatten(0, 1))).reshape(T, B, self.planes, H, W)
-
-        out = self.bn2(self.conv2(self.lif2(out).flatten(0, 1))).reshape(
-            T, B, self.planes, out_H, out_W
-        )
-        out = self.bn3(self.conv3(self.lif3(out).flatten(0, 1))).reshape(
-            T, B, self.planes * 4, out_H, out_W
-        )
+        out = self.layer1(self.lif1(x))
+        out = self.layer2(self.lif2(out))
+        out = self.layer3(self.lif3(out))
 
         if self.downsample is not None:
-            residual = self.downsample(x.flatten(0, 1)).reshape(
-                T, B, self.planes * self.expansion, out_H, out_W
-            )
+            residual = self.downsample(x)
 
         out += residual
 
@@ -146,8 +145,11 @@ class SpikeResNet(BaseModule):
         out_indices=(0, 1, 2, 3),
         strides=(1, 2, 2, 2),
         frozen_stages=-1,
-        spike_mode="lif",
-        spike_backend="torch",
+        spike_cfg=dict(
+            spike_mode="lif",
+            spike_backend="torch",
+            spike_T=4,
+        ),
         init_cfg=None,
         train_cls=False,
         **kwargs,
@@ -169,12 +171,15 @@ class SpikeResNet(BaseModule):
         self.block, stage_blocks = self.arch_settings[depth]
         self.stage_blocks = stage_blocks[:num_stages]
 
-        self.get_t = GetT(T=4)
+        self.get_t = GetT(T=spike_cfg["spike_T"])
+
         # stage 0
-        self.lif1 = LIFNeuron(spike_mode=spike_mode, backend=spike_backend)
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(64, eps=1e-5)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.lif0 = LIFNeuron(**spike_cfg)
+        self.stage0 = layer.SeqToANNContainer(
+            nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False),
+            nn.BatchNorm2d(64, eps=1e-5),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+        )
 
         # stage 1-4
         self.res_layers = []
@@ -187,8 +192,7 @@ class SpikeResNet(BaseModule):
                 planes=planes,
                 num_blocks=num_blocks,
                 stride=stride,
-                spike_mode=spike_mode,
-                spike_backend=spike_backend,
+                spike_cfg=spike_cfg,
             )
             self.inplanes = planes * self.block.expansion
             layer_name = f"layer{i + 1}"
@@ -205,27 +209,33 @@ class SpikeResNet(BaseModule):
 
         self._freeze_stages()
 
-    def make_res_layer(self, block, inplanes, planes, num_blocks, stride=1, **kwargs):
+    def make_res_layer(
+        self, block, inplanes, planes, num_blocks, stride=1, spike_cfg=None, **kwargs
+    ):
         downsample = None
         if stride != 1 or inplanes != planes * block.expansion:
             downsample = nn.Sequential(
-                nn.Conv2d(
-                    self.inplanes,
-                    planes * block.expansion,
-                    kernel_size=1,
-                    stride=stride,
-                    bias=False,
+                LIFNeuron(**spike_cfg),
+                layer.SeqToANNContainer(
+                    nn.Conv2d(
+                        self.inplanes,
+                        planes * block.expansion,
+                        kernel_size=1,
+                        stride=stride,
+                        bias=False,
+                    ),
+                    nn.BatchNorm2d(planes * block.expansion),
                 ),
-                nn.BatchNorm2d(planes * block.expansion),
             )
 
         layers = []
         layers.append(
             block(
-                self.inplanes,
-                planes,
-                stride,
-                downsample,
+                inplanes=self.inplanes,
+                planes=planes,
+                stride=stride,
+                downsample=downsample,
+                spike_cfg=spike_cfg,
                 **kwargs,
             )
         )
@@ -253,9 +263,8 @@ class SpikeResNet(BaseModule):
 
         assert x.ndim == 5, "Input should be a 5D tensor"
         T, B, C, H, W = x.shape
-        x = self.maxpool(self.bn1(self.conv1(self.lif1(x).flatten(0, 1)))).reshape(
-            T, B, self.base_channels, math.ceil(H / 4), math.ceil(W / 4)
-        )
+
+        x = self.stage0(self.lif0(x))
 
         outs = []
         for i, layer_name in enumerate(self.res_layers):
