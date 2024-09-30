@@ -15,6 +15,7 @@ from ..layers import ResLayer
 
 from spikingjelly.clock_driven import layer
 from spikingjelly.clock_driven.neuron import (
+    MultiStepIFNode,
     MultiStepParametricLIFNode,
     MultiStepLIFNode,
 )
@@ -37,11 +38,11 @@ class LIFNeuron(BaseModule):
 
     def __init__(
         self,
-        spike_mode: Literal["lif", "plif"] = "lif",
+        spike_mode: Literal["lif", "plif", "if"] = "lif",
         tau: float = 2.0,
         v_threshold: float = 1.0,
         v_reset: float = 0.0,
-        detach_reset: bool = True,
+        detach_reset: bool = False,
         backend: Literal["torch", "cupy"] = "torch",
         **kwargs,
     ):
@@ -60,6 +61,13 @@ class LIFNeuron(BaseModule):
                 v_threshold=v_threshold,
                 detach_reset=detach_reset,
                 v_reset=v_reset,
+                backend=backend,
+            )
+        elif spike_mode == "if":
+            self.lif_neuron = MultiStepIFNode(
+                v_threshold=v_threshold,
+                v_reset=v_reset,
+                detach_reset=detach_reset,
                 backend=backend,
             )
         else:
@@ -275,7 +283,8 @@ class SpikeResNet(BaseModule):
 
         if self.train_cls:
             x = self.avgpool(x)
-            x = x.flatten(2).mean(0)
+            x = x.mean(0)
+            x = x.flatten(1)
             x = self.fc(x)
             return x
         else:
