@@ -34,6 +34,8 @@ from .transformer import (MLP, AdaptivePadding, CdnQueryGenerator,
                           DinoTransformerDecoder, DynamicConv,
                           Mask2FormerTransformerDecoder,
                           Mask2FormerTransformerDecoderLayer,
+                          SpikeDinoTransformerEncoder,
+                          SpikeDinoTransformerDecoder,
                           Mask2FormerTransformerEncoder, PatchEmbed,
                           PatchMerging, coordinate_to_encoding,
                           inverse_sigmoid, nchw_to_nlc, nlc_to_nchw)
@@ -61,5 +63,5 @@ __all__ = [
     'ConditionalDetrTransformerDecoderLayer', 'DinoTransformerDecoder',
     'CdnQueryGenerator', 'Mask2FormerTransformerEncoder',
     'Mask2FormerTransformerDecoderLayer', 'Mask2FormerTransformerDecoder',
-    'SinePositionalEncoding3D', 'FrozenBatchNorm2d'
+    'SinePositionalEncoding3D', 'FrozenBatchNorm2d','SpikeDinoTransformerEncoder','SpikeDinoTransformerDecoder'
 ]

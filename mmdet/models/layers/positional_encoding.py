@@ -85,7 +85,7 @@ class SinePositionalEncoding(BaseModule):
             x_embed = not_mask.cumsum(2, dtype=torch.float32)
         else:
             # single image or batch image with no padding
-            B, _, H, W = input.shape
+            _, B, _, H, W = input.shape
             device = input.device
             x_embed = torch.arange(
                 1, W + 1, dtype=torch.float32, device=device)
