@@ -87,7 +87,7 @@ def load_data(traindir, valdir, cache_dataset, distributed):
         )
         if cache_dataset:
             print("Saving dataset_train to {}".format(cache_path))
-            os.mkdir(os.path.dirname(cache_path))
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
             save_on_master((dataset, traindir), cache_path)
     print("Took", time.time() - st)
 
@@ -111,7 +111,7 @@ def load_data(traindir, valdir, cache_dataset, distributed):
         )
         if cache_dataset:
             print("Saving dataset_test to {}".format(cache_path))
-            os.makedirs(os.path.dirname(cache_path))
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
             save_on_master((dataset_test, valdir), cache_path)
 
     print("Creating data loaders")

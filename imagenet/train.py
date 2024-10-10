@@ -5,6 +5,7 @@ import time
 import random
 import numpy as np
 import argparse
+from requests import get
 import wandb
 from tqdm import tqdm
 from loguru import logger
@@ -14,7 +15,7 @@ import torch.utils.data
 from torch import mode, nn
 import torchvision
 from torchvision import transforms
-from torch.cuda import amp
+from torchvision import models
 import torch.distributed.optim
 
 from mmdet.registry import MODELS
@@ -23,12 +24,26 @@ import utils
 from spikingjelly.clock_driven import functional
 
 
+def get_model(args):
+    resnet = MODELS.build(
+        dict(
+            type="SpikeResNet",
+            depth=50,
+            out_indices=(1, 2, 3),
+            spike_cfg=dict(spike_mode="if", spike_backend="cupy", spike_T=args.T),
+            train_cls=True,
+        ),
+    )
+    # model = models.resnet50(pretrained=False)
+    return resnet
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="PyTorch Classification Training")
 
     parser.add_argument("--data-path", default="/root/autodl-tmp/imagenet", help="dataset")
     parser.add_argument("--device", default="cuda", help="device")
-    parser.add_argument("-b", "--batch-size", default=32, type=int)
+    parser.add_argument("-b", "--batch-size", default=48, type=int)
     parser.add_argument(
         "--epochs", default=320, type=int, metavar="N", help="number of total epochs to run"
     )
@@ -111,7 +126,7 @@ def train_one_epoch(model, criterion, data_loader, optimizer, device, epoch, tot
         start_time = time.time()
         image, target = image.to(device), target.to(device)
         if scaler is not None:
-            with amp.autocast():
+            with torch.amp.autocast("cuda"):
                 output = model(image)
                 loss = criterion(output, target)
         else:
@@ -172,13 +187,9 @@ def eval(model, criterion, epoch, data_loader, device):
             target = target.to(device, non_blocking=True)
 
             # compute output
-            try:
-                output = model(images)
-            except:
-                print(images.shape)
-                print(target.shape)
-
+            output = model(images)
             loss = criterion(output, target)
+            functional.reset_net(model)
 
             acc1, acc5 = utils.accuracy(output, target, topk=(1, 5))
             if pbar is not None:
@@ -329,15 +340,7 @@ def main():
         drop_last=True,
     )
 
-    model = MODELS.build(
-        dict(
-            type="SpikeResNet",
-            depth=50,
-            out_indices=(1, 2, 3),
-            spike_cfg=dict(spike_mode="lif", spike_backend="cupy", spike_T=args.T),
-            train_cls=True,
-        ),
-    )
+    model = get_model(args)
 
     device = torch.device(args.device)
     model.to(device)
@@ -355,10 +358,10 @@ def main():
             lr=args.lr,
             momentum=args.momentum,
             weight_decay=args.weight_decay,
-            nesterov=True,
+            # nesterov=True,
         )
     if args.amp:
-        scaler = amp.GradScaler()
+        scaler = torch.amp.GradScaler("cuda")
     else:
         scaler = None
 
