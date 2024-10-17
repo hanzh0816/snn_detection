@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from mmcv.transforms import to_tensor
@@ -144,6 +144,49 @@ class PackDetInputs(BaseTransform):
         repr_str = self.__class__.__name__
         repr_str += f'(meta_keys={self.meta_keys})'
         return repr_str
+
+
+@TRANSFORMS.register_module()
+class PackMultiModalDetInputs(BaseTransform):
+    mapping_table = {
+        "gt_bboxes": "bboxes",
+        "gt_bboxes_labels": "labels",
+    }
+
+    def __init__(
+        self,
+        meta_keys=(
+            "img_id",
+            "img_path",
+            "ori_shape",
+            "img_shape",
+            "scale_factor",
+            "flip",
+            "flip_direction",
+        ),
+    ):
+        self.meta_keys = meta_keys
+
+    def transform(self, results: Dict) -> Dict:
+        packed_results = dict()
+        assert "img" in results and "event" in results
+
+        img = results["img"]
+        event = results["event"]
+
+        if not img.flags.c_contiguous:
+            img = np.ascontiguousarray(img.transpose(2, 0, 1))  # H,W,C -> C,H,W
+            img = to_tensor(img)
+        else:
+            img = to_tensor(img).permute(2, 0, 1).contiguous()
+
+        if not event.flags.c_contiguous:
+            event = np.ascontiguousarray(event.transpose(0, 3, 1, 2))  # T,H,W,C -> T,C,H,W
+            event = to_tensor(event)
+        else:
+            event = to_tensor(event).permute(0, 3, 1, 2).contiguous()
+        
+        packed_results['inputs'] = img
 
 
 @TRANSFORMS.register_module()

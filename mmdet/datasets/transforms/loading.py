@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 from typing import Optional, Tuple, Union
 
 import mmcv
@@ -62,6 +63,58 @@ class LoadImageFromNDArray(LoadImageFromFile):
         results['img_shape'] = img.shape[:2]
         results['ori_shape'] = img.shape[:2]
         return results
+
+
+@TRANSFORMS.register_module()
+class LoadImageAndEventFromFolder(LoadImageFromFile):
+    """
+    # snn_todo 添加docs
+    """
+
+    def transform(self, results: dict) -> dict:
+        filename = results["img_path"]
+        img_path = os.path.join(filename, f"{os.path.basename(filename)}.png")
+        event_path = os.path.join(filename, f"{os.path.basename(filename)}.npy")
+        img = self._load_image(img_path)
+        event = self._load_event(event_path)
+
+        results["img"] = img
+        results["event"] = event
+        results["img_shape"] = img.shape[:2]
+        results["ori_shape"] = img.shape[:2]
+
+        return results
+
+    def _load_image(self, filename: str) -> np.ndarray:
+        try:
+            img_bytes = get(filename, backend_args=self.backend_args)
+            img = mmcv.imfrombytes(img_bytes, flag=self.color_type, backend=self.imdecode_backend)
+        except Exception as e:
+            if self.ignore_empty:
+                return None
+            else:
+                raise e
+        # in some cases, images are not read successfully, the img would be
+        # `None`, refer to https://github.com/open-mmlab/mmpretrain/issues/1427
+        assert img is not None, f"failed to load image: {filename}"
+        if self.to_float32:
+            img = img.astype(np.float32)
+        return img
+
+    def _load_event(self, filename: str) -> np.ndarray:
+        try:
+            event = np.load(filename)  # T,C,H,W
+        except Exception as e:
+            if self.ignore_empty:
+                return None
+            else:
+                raise e
+        # in some cases, images are not read successfully, the img would be
+        # `None`, refer to https://github.com/open-mmlab/mmpretrain/issues/1427
+        assert event is not None, f"failed to load event: {filename}"
+        if self.to_float32:
+            event = event.astype(np.float32)
+        return event
 
 
 @TRANSFORMS.register_module()
