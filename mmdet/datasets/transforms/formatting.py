@@ -187,7 +187,62 @@ class PackMultiModalDetInputs(BaseTransform):
             event = to_tensor(event).permute(0, 3, 1, 2).contiguous()
         
         packed_results['inputs'] = img
+        packed_results['event'] = event
+        
+        if 'gt_ignore_flags' in results:
+            valid_idx = np.where(results['gt_ignore_flags'] == 0)[0]
+            ignore_idx = np.where(results['gt_ignore_flags'] == 1)[0]
+            
+        data_sample = DetDataSample()
+        instance_data = InstanceData()
+        ignore_instance_data = InstanceData()
 
+        for key in self.mapping_table.keys():
+            if key not in results:
+                raise KeyError(f'missing key "{key}" in results')
+            if key == 'gt_masks' or isinstance(results[key], BaseBoxes):
+                if 'gt_ignore_flags' in results:
+                    instance_data[
+                        self.mapping_table[key]] = results[key][valid_idx]
+                    ignore_instance_data[
+                        self.mapping_table[key]] = results[key][ignore_idx]
+                else:
+                    instance_data[self.mapping_table[key]] = results[key]
+            else:
+                if 'gt_ignore_flags' in results:
+                    instance_data[self.mapping_table[key]] = to_tensor(
+                        results[key][valid_idx])
+                    ignore_instance_data[self.mapping_table[key]] = to_tensor(
+                        results[key][ignore_idx])
+                else:
+                    instance_data[self.mapping_table[key]] = to_tensor(
+                        results[key])
+        data_sample.gt_instances = instance_data
+        data_sample.ignored_instances = ignore_instance_data
+
+        if 'proposals' in results:
+            proposals = InstanceData(
+                bboxes=to_tensor(results['proposals']),
+                scores=to_tensor(results['proposals_scores']))
+            data_sample.proposals = proposals
+
+        if 'gt_seg_map' in results:
+            gt_sem_seg_data = dict(
+                sem_seg=to_tensor(results['gt_seg_map'][None, ...].copy()))
+            gt_sem_seg_data = PixelData(**gt_sem_seg_data)
+            if 'ignore_index' in results:
+                metainfo = dict(ignore_index=results['ignore_index'])
+                gt_sem_seg_data.set_metainfo(metainfo)
+            data_sample.gt_sem_seg = gt_sem_seg_data
+
+        img_meta = {}
+        for key in self.meta_keys:
+            if key in results:
+                img_meta[key] = results[key]
+        data_sample.set_metainfo(img_meta)
+        packed_results['data_samples'] = data_sample
+
+        return packed_results
 
 @TRANSFORMS.register_module()
 class ToTensor:
