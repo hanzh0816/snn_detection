@@ -11,10 +11,21 @@ from mmengine.model.utils import stack_batch
 class MultiModalDetDataPreprocessor(DetDataPreprocessor):
     def forward(self, data: dict, training: bool = False) -> dict:
         batch_pad_shape = self._get_pad_shape(data)
-        data = super().forward(data=data, training=training)
+        # 转换数据到对应device
+        data = self.cast_data(data)
         inputs, event, data_samples = data["inputs"], data["event"], data["data_samples"]
+        batch_inputs = []
+        batch_events = []
+        for _batch_input, _batch_event in zip(inputs, event):
+            _batch_input = _batch_input.float()
+            _batch_event = _batch_event.float()
+            batch_inputs.append(_batch_input)
+            batch_events.append(_batch_event)
 
-        event = stack_batch(event)
+        inputs = stack_batch(batch_inputs)
+        event = stack_batch(batch_events)
+
+        # snn_todo 缺少image的归一化操作
 
         if data_samples is not None:
             # NOTE the batched image size information may be useful, e.g.
