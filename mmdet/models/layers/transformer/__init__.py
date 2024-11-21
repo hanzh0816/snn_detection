@@ -12,6 +12,8 @@ from .deformable_detr_layers import (DeformableDetrTransformerDecoder,
 from .detr_layers import (DetrTransformerDecoder, DetrTransformerDecoderLayer,
                           DetrTransformerEncoder, DetrTransformerEncoderLayer)
 from .dino_layers import CdnQueryGenerator, DinoTransformerDecoder
+from .spike_deformable_detr_layers import SpikeQueryGenerator
+
 from .grounding_dino_layers import (GroundingDinoTransformerDecoder,
                                     GroundingDinoTransformerDecoderLayer,
                                     GroundingDinoTransformerEncoder)
@@ -37,5 +39,5 @@ __all__ = [
     'CdnQueryGenerator', 'Mask2FormerTransformerEncoder',
     'Mask2FormerTransformerDecoderLayer', 'Mask2FormerTransformerDecoder',
     'GroundingDinoTransformerDecoderLayer', 'GroundingDinoTransformerEncoder',
-    'GroundingDinoTransformerDecoder'
+    'GroundingDinoTransformerDecoder','SpikeQueryGenerator'
 ]

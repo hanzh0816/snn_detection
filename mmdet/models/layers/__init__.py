@@ -36,7 +36,8 @@ from .transformer import (MLP, AdaptivePadding, CdnQueryGenerator,
                           Mask2FormerTransformerDecoderLayer,
                           Mask2FormerTransformerEncoder, PatchEmbed,
                           PatchMerging, coordinate_to_encoding,
-                          inverse_sigmoid, nchw_to_nlc, nlc_to_nchw)
+                          inverse_sigmoid, nchw_to_nlc, nlc_to_nchw,
+                          SpikeQueryGenerator)
 
 # yapf: enable
 
@@ -61,5 +62,5 @@ __all__ = [
     'ConditionalDetrTransformerDecoderLayer', 'DinoTransformerDecoder',
     'CdnQueryGenerator', 'Mask2FormerTransformerEncoder',
     'Mask2FormerTransformerDecoderLayer', 'Mask2FormerTransformerDecoder',
-    'SinePositionalEncoding3D', 'FrozenBatchNorm2d'
+    'SinePositionalEncoding3D', 'FrozenBatchNorm2d','SpikeQueryGenerator'
 ]
