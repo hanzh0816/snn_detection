@@ -160,7 +160,7 @@ class SpikeQueryGeneratorLayer(BaseModule):
             please set `batch_first` flag."
 
         self.ffn_cfg = ffn_cfg
-        self.norm_cfg = norm_cfg
+        self.norm_cfg = norm_cfg  # 弃用参数
         self.spike_cfg = spike_cfg
         self._init_layers()
 
@@ -169,7 +169,9 @@ class SpikeQueryGeneratorLayer(BaseModule):
         self.self_attn = MultiScaleDeformableAttention(**self.self_attn_cfg)
         self.embed_dims = self.self_attn.embed_dims
         self.ffn = SpikeFFN(**self.ffn_cfg)
-        norms_list = [build_norm_layer(self.norm_cfg, self.embed_dims)[1] for _ in range(2)]
+
+        # snn_tag 此处使用BN，不确定BN和LN孰优孰劣
+        norms_list = [layer.SeqToANNContainer(nn.BatchNorm1d(self.embed_dims)) for _ in range(2)]
         self.norms = ModuleList(norms_list)
 
     def forward(
@@ -196,8 +198,13 @@ class SpikeQueryGeneratorLayer(BaseModule):
         """
         # [T,B,N,C]
         T, B, N, C = query.shape
+
+        # lif1
         query = self.lif(query)
+
+        # self-attention & norm1
         query = query.flatten(0, 1)
+        query_pos = query_pos.flatten(0, 1)  # [T*B,N,C]
         query = self.self_attn(
             query=query,
             key=query,
@@ -210,11 +217,18 @@ class SpikeQueryGeneratorLayer(BaseModule):
             reference_points=reference_points,
             **kwargs,
         )
-        query = self.norms[0](query)
         query = query.reshape(T, B, N, C).contiguous()
+        query = query.permute(0, 1, 3, 2)  # [T,B,C,N]
+        query = self.norms[0](query)
+        query = query.permute(0, 1, 3, 2).contiguous()  # [T,B,N,C]
+
+        # ffn
         query = self.ffn(query)
+
+        # norm2
+        query = query.permute(0, 1, 3, 2)  # [T,B,C,N]
         query = self.norms[1](query)
-        query = query.reshape(T, B, N, C)
+        query = query.permute(0, 1, 3, 2).contiguous()  # [T,B,N,C]
 
         return query
 
@@ -238,10 +252,10 @@ class SpikeQueryGenerator(BaseModule):
 
         self.memory_trans = nn.Sequential(
             LIFNeuron(**self.layer_cfg["spike_cfg"]),
-            layer.SeqToANNContainer(
-                nn.Linear(self.embed_dims, self.embed_dims), nn.BatchNorm2d(self.embed_dims)
-            ),
+            layer.SeqToANNContainer(nn.Linear(self.embed_dims, self.embed_dims)),
         )
+        # snn_tag 此处用了BN
+        self.memory_norm = layer.SeqToANNContainer(nn.BatchNorm1d(self.embed_dims))
         self.pos_trans_fc = nn.Linear(self.embed_dims * 2, self.embed_dims * 2)
         self.pos_trans_norm = nn.LayerNorm(self.embed_dims * 2)
 
@@ -253,8 +267,8 @@ class SpikeQueryGenerator(BaseModule):
         spatial_shapes: Tensor,
         level_start_index: Tensor,
         valid_ratios: Tensor,
-        cls_branches: nn.Linear,
-        reg_branches: nn.Sequential,
+        cls_branch: nn.Linear,
+        reg_branch: nn.Sequential,
         **kwargs,
     ) -> Tensor:
         """
@@ -279,14 +293,22 @@ class SpikeQueryGenerator(BaseModule):
         # event_feat_pos和key_padding_mask重复T次,与event_feat对齐
         event_feat_pos = event_feat_pos.unsqueeze(0).repeat(T, 1, 1, 1)
         event_key_padding_mask = key_padding_mask
-        event_key_padding_mask = (
-            event_key_padding_mask.unsqueeze(0).repeat(T, 1, 1, 1).flatten(0, 1)
-        )  # [T*B, N]
+        if event_key_padding_mask is not None:
+            # 有mask时,重复T次,与event_feat对齐
+            event_key_padding_mask = (
+                event_key_padding_mask.unsqueeze(0).repeat(T, 1, 1, 1).flatten(0, 1)
+            )  # [T*B, N]
 
         # encoder输入的reference_points
         reference_points = self.get_encoder_reference_points(
-            spatial_shapes, valid_ratios, device=query.device
+            spatial_shapes, valid_ratios, device=event_feat.device
         )
+
+        # reference_points的shape为[T, B, N, 4, 2]
+        # snn_todo 为什么reference_points的shape是这个
+        reference_points = reference_points.unsqueeze(0).repeat(T, 1, 1, 1, 1)
+        reference_points = reference_points.flatten(0, 1)  # [T*B, N, 4, 2]
+
         for layer in self.layers:
             event_feat = layer(
                 query=event_feat,
@@ -304,8 +326,8 @@ class SpikeQueryGenerator(BaseModule):
 
         # 这里的output_memory已经对时间维度取平均,可以直接计算cls和reg
         # snn_todo 重新构造head,这里只用到了前景-背景预测,不应该使用和其他cls相同的head
-        enc_outputs_class = cls_branches(output_memory)
-        enc_outputs_coord_unact = reg_branches(output_memory) + output_proposals
+        enc_outputs_class = cls_branch(output_memory)
+        enc_outputs_coord_unact = reg_branch(output_memory) + output_proposals
         enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
         topk_proposals = torch.topk(enc_outputs_class[..., 0], self.num_queries, dim=1)[1]
         topk_coords_unact = torch.gather(
@@ -379,7 +401,9 @@ class SpikeQueryGenerator(BaseModule):
 
         output_proposals_valid = output_proposals_valid.unsqueeze(0).repeat(T, 1, 1, 1)
         output_memory = output_memory.masked_fill(~output_proposals_valid, float(0))
-        output_memory = self.memory_trans(output_memory)
+        output_memory = self.memory_trans(output_memory)  # [T,B,N,C]
+        output_memory = output_memory.permute(0, 1, 3, 2)  # [T,B,C,N]
+        output_memory = self.memory_norm(output_memory).permute(0, 1, 3, 2).mean(0)  # [B,N,C]
 
         # [B, N, embed_dims], [B, N, 2]
         return output_memory, output_proposals
