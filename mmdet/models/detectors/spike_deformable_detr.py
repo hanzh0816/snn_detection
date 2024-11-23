@@ -176,7 +176,7 @@ class SpikeDeformableDETR(BaseDetector):
         """
         x = self.backbone(batch_imgs, batch_events)
         if self.with_neck:
-            x = self.neck(x)
+            x = self.neck(*x)
         return x
 
     def forward_transformer(
@@ -301,12 +301,14 @@ class SpikeDeformableDETR(BaseDetector):
             spike_t, batch_size, c, _, _ = event_feat.shape
             spatial_shape = torch._shape_as_tensor(img_feat)[2:].to(img_feat.device)
             # [B, C, H, W] -> [B, H*W, C]
-            img_feat = img_feat.view(batch_size, c, -1).permute(0, 2, 1)
+            img_feat = img_feat.reshape(batch_size, c, -1).permute(0, 2, 1)
             # [T, B, C, H, W] -> [T, B, H*W, C]
-            event_feat = event_feat.view(spike_t, batch_size, c, -1).permute(0, 1, 3, 2)
+            event_feat = (
+                event_feat.reshape(spike_t, batch_size, c, -1).permute(0, 1, 3, 2)
+            )
 
-            pos_embed = pos_embed.view(batch_size, c, -1).permute(0, 2, 1)
-            lvl_pos_embed = pos_embed + self.level_embed[lvl].view(1, 1, -1)
+            pos_embed = pos_embed.reshape(batch_size, c, -1).permute(0, 2, 1)
+            lvl_pos_embed = pos_embed + self.level_embed[lvl].reshape(1, 1, -1)
             # [B, H, W] -> [B, H*W]
             if mask is not None:
                 mask = mask.flatten(1)
@@ -331,7 +333,7 @@ class SpikeDeformableDETR(BaseDetector):
             mask_flatten = None
 
         # (num_level, 2)
-        spatial_shapes = torch.cat(spatial_shapes).view(-1, 2)
+        spatial_shapes = torch.cat(spatial_shapes).contiguous().reshape(-1, 2)
         level_start_index = torch.cat(
             (spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1])  # (num_level)
         )
@@ -386,6 +388,8 @@ class SpikeDeformableDETR(BaseDetector):
             memory=memory,
             memory_mask=feat_mask,
             spatial_shapes=spatial_shapes,
+            level_start_index=level_start_index,
+            valid_ratios=valid_ratios,
         )
         return encoder_outputs_dict
 
@@ -396,6 +400,8 @@ class SpikeDeformableDETR(BaseDetector):
         memory: Tensor,
         memory_mask: Tensor,
         spatial_shapes: Tensor,
+        level_start_index: Tensor,
+        valid_ratios: Tensor,
         batch_data_samples: OptSampleList = None,
         **kwargs,
     ) -> Tuple[Dict, Dict]:
@@ -406,7 +412,15 @@ class SpikeDeformableDETR(BaseDetector):
         # snn_todo 实现spike_query_generator
         query_pos, query, reference_points, spike_outputs_class, spike_outputs_coord = (
             self.spike_query_generator(
-                event_feat, event_feat_pos, memory_mask, spatial_shapes, batch_data_samples
+                event_feat=event_feat,
+                event_feat_pos=event_feat_pos,
+                key_padding_mask=memory_mask,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+                valid_ratios=valid_ratios,
+                cls_branch=self.bbox_head.cls_branches[self.decoder.num_layers],
+                reg_branch=self.bbox_head.reg_branches[self.decoder.num_layers],
+                batch_data_samples=batch_data_samples,
             )
         )
 
