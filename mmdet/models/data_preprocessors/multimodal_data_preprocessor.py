@@ -19,13 +19,24 @@ class MultiModalDetDataPreprocessor(DetDataPreprocessor):
         for _batch_input, _batch_event in zip(inputs, event):
             _batch_input = _batch_input.float()
             _batch_event = _batch_event.float()
+
+            # Normalization.
+            if self._enable_normalize:
+                if self.mean.shape[0] == 3:
+                    assert _batch_input.dim() == 3 and _batch_input.shape[0] == 3, (
+                        "If the mean has 3 values, the input tensor "
+                        "should in shape of (3, H, W), but got the tensor "
+                        f"with shape {_batch_input.shape}"
+                    )
+                _batch_input = (_batch_input - self.mean) / self.std
+            
             batch_inputs.append(_batch_input)
             batch_events.append(_batch_event)
 
         inputs = stack_batch(batch_inputs)
         event = stack_batch(batch_events)
-
-        # snn_todo 缺少image的归一化操作
+        # [B,T,C,H,W] -> [T,B,C,H,W]
+        event = event.permute(1, 0, 2, 3, 4).contiguous()
 
         if data_samples is not None:
             # NOTE the batched image size information may be useful, e.g.
