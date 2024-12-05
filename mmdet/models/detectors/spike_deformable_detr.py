@@ -88,9 +88,8 @@ class SpikeDeformableDETR(BaseDetector):
             # when `as_two_stage` is `True`. And all the prediction layers should
             # share parameters when `with_box_refine` is `True`.
             bbox_head["share_pred_layer"] = not with_box_refine
-            bbox_head["num_pred_layer"] = (
-                (decoder["num_layers"] + 1) if self.as_two_stage else decoder["num_layers"]
-            )
+            # pred_layer恒为num_layers + 1, 在not as_two_stage时冻结最后一层
+            bbox_head["num_pred_layer"] = decoder["num_layers"] + 1
             bbox_head["as_two_stage"] = as_two_stage
 
         bbox_head.update(train_cfg=train_cfg)
@@ -122,12 +121,11 @@ class SpikeDeformableDETR(BaseDetector):
 
         self.level_embed = nn.Parameter(Tensor(self.num_feature_levels, self.embed_dims))
 
-        if self.phase == "single":
-            self.query_embedding = nn.Embedding(self.num_queries, self.embed_dims * 2)
-            self.reference_points_fc = nn.Linear(self.embed_dims, 2)
-        else:
-            # snn_todo 初始化spike query generator
-            self.spike_query_generator = SpikeQueryGenerator(**self.spike_query_generator)
+        self.query_embedding = nn.Embedding(self.num_queries, self.embed_dims * 2)
+        self.reference_points_fc = nn.Linear(self.embed_dims, 2)
+
+        # snn_todo 初始化spike query generator
+        self.spike_query_generator = SpikeQueryGenerator(**self.spike_query_generator)
 
     def _init_weights(self) -> None:
         """Initialize weights for Transformer and other components."""
