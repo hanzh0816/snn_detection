@@ -34,8 +34,11 @@ class SpikeDeformableDETR(BaseDetector):
 
     def __init__(
         self,
-        backbone: OptConfigType = None,
-        neck: OptConfigType = None,
+        phase: str = "single",
+        img_backbone: OptConfigType = None,
+        event_backbone: OptConfigType = None,
+        img_neck: OptConfigType = None,
+        event_neck: OptConfigType = None,
         encoder: OptConfigType = None,
         decoder: OptConfigType = None,
         bbox_head: OptConfigType = None,
@@ -43,7 +46,7 @@ class SpikeDeformableDETR(BaseDetector):
         data_preprocessor: OptConfigType = None,
         spike_query_generator: OptConfigType = None,
         num_queries: int = 300,
-        with_box_refine: bool = True,
+        with_box_refine: bool = False,
         as_two_stage: bool = True,
         num_feature_levels: int = 4,
         train_cfg: OptConfigType = None,
@@ -53,6 +56,8 @@ class SpikeDeformableDETR(BaseDetector):
     ) -> None:
         super().__init__(data_preprocessor=data_preprocessor, init_cfg=init_cfg)
         # process args
+
+        self.phase = phase
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.encoder = encoder
@@ -64,9 +69,9 @@ class SpikeDeformableDETR(BaseDetector):
         self.num_feature_levels = num_feature_levels
         self.spike_query_generator = spike_query_generator
 
-        assert (
-            self.as_two_stage and self.with_box_refine
-        ), "`as_two_stage`&`with_box_refine`  must be True for this model"
+        # assert (
+        #     self.as_two_stage and self.with_box_refine
+        # ), "`as_two_stage`&`with_box_refine`  must be True for this model"
 
         if bbox_head is not None:
             assert (
@@ -83,15 +88,22 @@ class SpikeDeformableDETR(BaseDetector):
             # when `as_two_stage` is `True`. And all the prediction layers should
             # share parameters when `with_box_refine` is `True`.
             bbox_head["share_pred_layer"] = not with_box_refine
-            bbox_head["num_pred_layer"] = decoder["num_layers"] + 1
+            bbox_head["num_pred_layer"] = (
+                (decoder["num_layers"] + 1) if self.as_two_stage else decoder["num_layers"]
+            )
             bbox_head["as_two_stage"] = as_two_stage
 
         bbox_head.update(train_cfg=train_cfg)
         bbox_head.update(test_cfg=test_cfg)
 
         # init model layers
-        self.backbone = MODELS.build(backbone)
-        self.neck = MODELS.build(neck)
+        self.img_backbone = MODELS.build(img_backbone)
+        self.neck = MODELS.build(img_neck)
+
+        if self.phase == "fusion":
+            self.event_backbone = MODELS.build(event_backbone)
+            self.event_neck = MODELS.build(event_neck)
+
         self.bbox_head = MODELS.build(bbox_head)
 
         self._init_layers()
@@ -110,8 +122,12 @@ class SpikeDeformableDETR(BaseDetector):
 
         self.level_embed = nn.Parameter(Tensor(self.num_feature_levels, self.embed_dims))
 
-        # snn_todo 初始化spike query generator
-        self.spike_query_generator = SpikeQueryGenerator(**self.spike_query_generator)
+        if self.phase == "single":
+            self.query_embedding = nn.Embedding(self.num_queries, self.embed_dims * 2)
+            self.reference_points_fc = nn.Linear(self.embed_dims, 2)
+        else:
+            # snn_todo 初始化spike query generator
+            self.spike_query_generator = SpikeQueryGenerator(**self.spike_query_generator)
 
     def _init_weights(self) -> None:
         """Initialize weights for Transformer and other components."""
@@ -133,24 +149,18 @@ class SpikeDeformableDETR(BaseDetector):
         # normal_(self.level_embed)
         pass
 
-    def _forward(self):
-        pass
-
-    def predict(self):
-        pass
-
     def forward(
         self,
         inputs: Tensor,
-        event: Tensor,
+        event: Tensor = None,
         data_samples: OptSampleList = None,
         mode: str = "tensor",
     ) -> ForwardResults:
         if mode == "loss":
             return self.loss(inputs, event, data_samples)
         elif mode == "predict":
-            raise NotImplementedError("predict mode is not implemented yet")
-            # return self.predict(inputs, data_samples)
+            # raise NotImplementedError("predict mode is not implemented yet")
+            return self.predict(inputs, event, data_samples)
         elif mode == "tensor":
             raise NotImplementedError("tensor mode is not implemented yet")
             # return self._forward(inputs, data_samples)
@@ -162,7 +172,7 @@ class SpikeDeformableDETR(BaseDetector):
     def loss(
         self,
         batch_imgs: Tensor,
-        batch_events: Tensor,
+        batch_events: Tensor = None,
         batch_data_samples: OptSampleList = None,
     ):
         img_feats, event_feats = self.extract_feat(batch_imgs, batch_events)
@@ -170,14 +180,65 @@ class SpikeDeformableDETR(BaseDetector):
         losses = self.bbox_head.loss(**head_inputs_dict, batch_data_samples=batch_data_samples)
         return losses
 
-    def extract_feat(self, batch_imgs: Tensor, batch_events: Tensor) -> Tuple[Tensor]:
+    def predict(
+        self,
+        batch_imgs: Tensor,
+        batch_events: Tensor = None,
+        batch_data_samples: SampleList = None,
+        rescale: bool = True,
+    ) -> SampleList:
+        """Predict results from a batch of inputs and data samples with post-
+        processing.
+
+        Args:
+            batch_inputs (Tensor): Inputs, has shape (bs, dim, H, W).
+            batch_data_samples (List[:obj:`DetDataSample`]): The batch
+                data samples. It usually includes information such
+                as `gt_instance` or `gt_panoptic_seg` or `gt_sem_seg`.
+            rescale (bool): Whether to rescale the results.
+                Defaults to True.
+
+        Returns:
+            list[:obj:`DetDataSample`]: Detection results of the input images.
+            Each DetDataSample usually contain 'pred_instances'. And the
+            `pred_instances` usually contains following keys.
+
+            - scores (Tensor): Classification scores, has a shape
+              (num_instance, )
+            - labels (Tensor): Labels of bboxes, has a shape
+              (num_instances, ).
+            - bboxes (Tensor): Has a shape (num_instances, 4),
+              the last dimension 4 arrange as (x1, y1, x2, y2).
+        """
+        img_feats, event_feats = self.extract_feat(batch_imgs, batch_events)
+        head_inputs_dict = self.forward_transformer(img_feats, event_feats, batch_data_samples)
+        results_list = self.bbox_head.predict(
+            **head_inputs_dict, rescale=rescale, batch_data_samples=batch_data_samples
+        )
+        batch_data_samples = self.add_pred_to_datasample(batch_data_samples, results_list)
+        return batch_data_samples
+
+    def _forward(self):
+        pass
+
+    def extract_feat(self, batch_imgs: Tensor, batch_events: Tensor = None) -> Tuple[Tensor]:
         """
         RGB inputs提取backbone多尺度特征
         """
-        x = self.backbone(batch_imgs, batch_events)
-        if self.with_neck:
-            x = self.neck(*x)
-        return x
+        if self.phase == "single":
+            img_feats = self.img_backbone(batch_imgs)
+            if self.with_neck:
+                img_feats = self.neck(img_feats)
+            return img_feats, None
+        elif self.phase == "fusion":
+            img_feats = self.img_backbone(batch_imgs)
+            event_feats = self.event_backbone(batch_events)
+            if self.with_neck:
+                img_feats = self.neck(img_feats)
+                event_feats = self.event_neck(event_feats)
+            return img_feats, event_feats
+        else:
+            raise ValueError("phase must be single or fusion")
 
     def forward_transformer(
         self,
@@ -258,6 +319,13 @@ class SpikeDeformableDETR(BaseDetector):
         Returns:
             tuple[Dict]: encoder_inputs_dict和decoder_inputs_dict
         """
+        if mlvl_event_feats is None:
+            mlvl_event_feats = []
+            for feat in mlvl_img_feats:
+                mlvl_event_feats.append(
+                    feat.new_zeros((1, feat.size(0), feat.size(1), feat.size(2), feat.size(3)))
+                )
+
         batch_size = mlvl_img_feats[0].size(0)
 
         # 根据batch中各个sample的input_shape确定mask.
@@ -298,14 +366,12 @@ class SpikeDeformableDETR(BaseDetector):
             zip(mlvl_img_feats, mlvl_event_feats, mlvl_masks, mlvl_pos_embeds)
         ):
             batch_size, c, _, _ = img_feat.shape
-            spike_t, batch_size, c, _, _ = event_feat.shape
+            spike_t, _, _, _, _ = event_feat.shape
             spatial_shape = torch._shape_as_tensor(img_feat)[2:].to(img_feat.device)
             # [B, C, H, W] -> [B, H*W, C]
             img_feat = img_feat.reshape(batch_size, c, -1).permute(0, 2, 1)
             # [T, B, C, H, W] -> [T, B, H*W, C]
-            event_feat = (
-                event_feat.reshape(spike_t, batch_size, c, -1).permute(0, 1, 3, 2)
-            )
+            event_feat = event_feat.reshape(spike_t, batch_size, c, -1).permute(0, 1, 3, 2)
 
             pos_embed = pos_embed.reshape(batch_size, c, -1).permute(0, 2, 1)
             lvl_pos_embed = pos_embed + self.level_embed[lvl].reshape(1, 1, -1)
@@ -408,21 +474,31 @@ class SpikeDeformableDETR(BaseDetector):
         """
         预处理decoder输入部分,使用spike_query_generator生成query_pos, query, reference_points输入到decoder中
         """
-
-        # snn_todo 实现spike_query_generator
-        query_pos, query, reference_points, spike_outputs_class, spike_outputs_coord = (
-            self.spike_query_generator(
-                event_feat=event_feat,
-                event_feat_pos=event_feat_pos,
-                key_padding_mask=memory_mask,
-                spatial_shapes=spatial_shapes,
-                level_start_index=level_start_index,
-                valid_ratios=valid_ratios,
-                cls_branch=self.bbox_head.cls_branches[self.decoder.num_layers],
-                reg_branch=self.bbox_head.reg_branches[self.decoder.num_layers],
-                batch_data_samples=batch_data_samples,
+        if self.phase == "single":
+            batch_size, _, c = memory.shape
+            spike_outputs_class, spike_outputs_coord = None, None
+            query_embed = self.query_embedding.weight
+            query_pos, query = torch.split(query_embed, c, dim=1)
+            query_pos = query_pos.unsqueeze(0).expand(batch_size, -1, -1)
+            query = query.unsqueeze(0).expand(batch_size, -1, -1)
+            reference_points = self.reference_points_fc(query_pos).sigmoid()
+        elif self.phase == "fusion":
+            # snn_todo 实现spike_query_generator
+            query_pos, query, reference_points, spike_outputs_class, spike_outputs_coord = (
+                self.spike_query_generator(
+                    event_feat=event_feat,
+                    event_feat_pos=event_feat_pos,
+                    key_padding_mask=memory_mask,
+                    spatial_shapes=spatial_shapes,
+                    level_start_index=level_start_index,
+                    valid_ratios=valid_ratios,
+                    cls_branch=self.bbox_head.cls_branches[self.decoder.num_layers],
+                    reg_branch=self.bbox_head.reg_branches[self.decoder.num_layers],
+                    batch_data_samples=batch_data_samples,
+                )
             )
-        )
+        else:
+            ValueError("phase must be single or fusion")
 
         decoder_inputs_dict = dict(
             query=query, query_pos=query_pos, memory=memory, reference_points=reference_points

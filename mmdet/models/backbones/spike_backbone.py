@@ -270,16 +270,3 @@ class SpikeResNet(BaseModule):
             return x
         else:
             return tuple(outs)
-
-
-@MODELS.register_module()
-class SpikeBackboneWrapper(BaseModule):
-    """Backbone for image-event bi-modality detector backbone."""
-
-    def __init__(self, img_backbone_cfg, event_backbone_cfg, init_cfg=None):
-        super().__init__(init_cfg)
-        self.img_backbone = MODELS.build(img_backbone_cfg)
-        self.event_backbone = MODELS.build(event_backbone_cfg)
-
-    def forward(self, img, event):
-        return self.img_backbone(img), self.event_backbone(event)

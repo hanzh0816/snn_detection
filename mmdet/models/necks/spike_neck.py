@@ -1,5 +1,5 @@
 import warnings
-from typing import List,Tuple, Union, Literal, Optional
+from typing import List, Tuple, Union, Literal, Optional
 
 import torch.nn as nn
 from torch import Tensor
@@ -135,18 +135,3 @@ class SpikeChannelMapper(BaseModule):
                 else:
                     outs.append(self.extra_convs[i](outs[-1]))
         return tuple(outs)
-
-
-@MODELS.register_module()
-class SpikeNeckWrapper(BaseModule):
-    """
-    neck wrapper for image-event bi-modality detector.
-    """
-
-    def __init__(self, img_neck_cfg, event_neck_cfg, init_cfg=None):
-        super().__init__(init_cfg)
-        self.img_neck = MODELS.build(img_neck_cfg)
-        self.event_neck = MODELS.build(event_neck_cfg)
-
-    def forward(self, img, event):
-        return self.img_neck(img), self.event_neck(event)
