@@ -70,7 +70,7 @@ def extract_mini_dataset(root_dir: Path, output_dir: Path, sample_ratio):
         output_annotations_path = output_dir / "annotations" / f"{mode}.json"
         output_annotations_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_annotations_path, "w") as f:
-            json.dump(sampled_coco_data, f)
+            json.dump(sampled_coco_data, f, indent=4)
 
         # 复制抽取的图像到新文件夹
         for sample in samples:
@@ -82,6 +82,47 @@ def extract_mini_dataset(root_dir: Path, output_dir: Path, sample_ratio):
             dst_img_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src_img_path, dst_img_path)
             shutil.copyfile(src_event_path, dst_event_path)
+
+        print(f"抽取完成：{num_samples} 张图像已保存到 {output_dir}")
+        print(f"新标注文件已保存到 {output_annotations_path}")
+
+
+def extract_img_mini_dataset(root_dir: Path, output_dir: Path, sample_ratio):
+    mode_list = ["train", "test"]
+    for mode in mode_list:
+        annotations_path = root_dir / "annotations" / f"{mode}.json"
+        with open(annotations_path, "r") as f:
+            coco_data = json.load(f)
+        samples_path = coco_data["images"]
+        # 计算抽样数量
+        num_samples = int(len(samples_path) * sample_ratio)
+
+        # 随机抽取样本
+        samples = random.sample(samples_path, num_samples)
+        samples_id = set(sample["id"] for sample in samples)
+
+        # 筛选对应的标注
+        sampled_annotations = [
+            ann for ann in coco_data["annotations"] if ann["image_id"] in samples_id
+        ]
+        # 构建新的标注文件
+        sampled_coco_data = deepcopy(coco_data)
+        sampled_coco_data["images"] = samples
+        sampled_coco_data["annotations"] = sampled_annotations
+
+        # 保存新的标注文件到输出目录
+        output_annotations_path = output_dir / "annotations" / f"{mode}.json"
+        output_annotations_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_annotations_path, "w") as f:
+            json.dump(sampled_coco_data, f, indent=4)
+
+        # 复制抽取的图像到新文件夹
+        for sample in samples:
+            src_img_path = root_dir / mode / sample["file_name"]
+            dst_img_path = output_dir / mode / sample["file_name"]
+
+            dst_img_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src_img_path, dst_img_path)
 
         print(f"抽取完成：{num_samples} 张图像已保存到 {output_dir}")
         print(f"新标注文件已保存到 {output_annotations_path}")
@@ -244,6 +285,170 @@ class DSECDataset:
         with open(self.annotations_path, "w") as f:
             json.dump(ann_result, f, indent=4)
 
+    def convert_to_coco_balanced(self):
+        sample_id = 0
+        ann_id = 0
+        imags = []
+        annotations = []
+        categories = [
+            {"id": 0, "name": "pedestrian"},
+            {"id": 1, "name": "car"},
+        ]
+
+        for f in tqdm(self.subsequence_directories, desc="Processing directories"):
+            img_idx_to_track_idxs = self.img_idx_track_idxs[f.name]
+            directory = self.directories[f.name]
+            imgs_path = directory.images.image_files_distorted
+
+            for img_idx in tqdm(
+                range(len(imgs_path) - 1), desc=f"Processing images in {f.name}", leave=False
+            ):
+                sample_fname = f"{f.name}_{imgs_path[img_idx].stem}"
+                # 读取图像
+                img = cv2.imread(imgs_path[img_idx])
+                # 获取事件对应前后图像索引窗口
+                img_idx_start, img_idx_end = self.get_index_window(img_idx, len(imgs_path))
+                # 获取索引对应图像时间戳（us）
+                start_timestamp, end_timestamp = directory.images.timestamps[
+                    [img_idx_start, img_idx_end]
+                ]
+                # 跳过无事件帧
+                if start_timestamp == end_timestamp:
+                    continue
+                # 获取raw事件流
+                events = self.extract_from_h5_by_timewindow(
+                    directory.events.event_file, start_timestamp, end_timestamp
+                )
+                # 获取numpy格式事件数据
+                event_npy = self.process_events_to_npy(events)
+                # 获取raw标注信息
+                track_start_idx, track_end_idx = img_idx_to_track_idxs[img_idx_end]  # 跳过无标注帧
+                if track_start_idx == track_end_idx:
+                    continue
+                tracks = directory.tracks.tracks[track_start_idx:track_end_idx]
+
+                # 提取标注到annotations中
+                anns, ann_id = self.process_tracks_to_dict_balanced(tracks, ann_id, sample_id)
+                if len(anns) == 0:
+                    print(f"no annotations for sample: {sample_fname}")
+                    continue
+
+                # 添加到annotations.json的内容
+                annotations.extend(anns)
+                imags.append(
+                    {
+                        "id": sample_id,
+                        "width": self.width,
+                        "height": self.height,
+                        "file_name": sample_fname,
+                    }
+                )
+                self.save_sample(sample_fname, img, event_npy)
+                sample_id += 1
+
+        ann_result = {"images": imags, "annotations": annotations, "categories": categories}
+        with open(self.annotations_path, "w") as f:
+            json.dump(ann_result, f, indent=4)
+
+    def img_to_coco(self):
+        sample_id = 0
+        ann_id = 0
+        imags = []
+        annotations = []
+        categories = CATEGORIES
+        for f in tqdm(self.subsequence_directories, desc="Processing directories"):
+            img_idx_to_track_idxs = self.img_idx_track_idxs[f.name]
+            directory = self.directories[f.name]
+            imgs_path = directory.images.image_files_distorted
+
+            for img_idx in tqdm(
+                range(len(imgs_path) - 1), desc=f"Processing images in {f.name}", leave=False
+            ):
+                sample_fname = f"{f.name}_{imgs_path[img_idx].stem}.png"
+                # 读取图像
+                img = cv2.imread(imgs_path[img_idx])
+                # 获取事件对应前后图像索引窗口
+                img_idx_start, img_idx_end = self.get_index_window(img_idx, len(imgs_path))
+
+                # 获取raw标注信息
+                track_start_idx, track_end_idx = img_idx_to_track_idxs[img_idx_end]  # 跳过无标注帧
+                if track_start_idx == track_end_idx:
+                    continue
+                tracks = directory.tracks.tracks[track_start_idx:track_end_idx]
+                anns, ann_id = self.process_tracks_to_dict(tracks, ann_id, sample_id)
+
+                # 添加到annotations.json的内容
+                annotations.extend(anns)
+                imags.append(
+                    {
+                        "id": sample_id,
+                        "width": self.width,
+                        "height": self.height,
+                        "file_name": sample_fname,
+                    }
+                )
+                save_path = self.output_dir / sample_fname
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(save_path, img)
+
+                sample_id += 1
+
+        ann_result = {"images": imags, "annotations": annotations, "categories": categories}
+        with open(self.annotations_path, "w") as f:
+            json.dump(ann_result, f, indent=4)
+
+    def img_to_coco_balanced(self):
+        sample_id = 0
+        ann_id = 0
+        imags = []
+        annotations = []
+        categories = [
+            {"id": 0, "name": "pedestrian"},
+            {"id": 1, "name": "car"},
+        ]
+        for f in tqdm(self.subsequence_directories, desc="Processing directories"):
+            img_idx_to_track_idxs = self.img_idx_track_idxs[f.name]
+            directory = self.directories[f.name]
+            imgs_path = directory.images.image_files_distorted
+
+            for img_idx in tqdm(
+                range(len(imgs_path) - 1), desc=f"Processing images in {f.name}", leave=False
+            ):
+                sample_fname = f"{f.name}_{imgs_path[img_idx].stem}.png"
+                # 读取图像
+                img = cv2.imread(imgs_path[img_idx])
+                # 获取事件对应前后图像索引窗口
+                img_idx_start, img_idx_end = self.get_index_window(img_idx, len(imgs_path))
+
+                # 获取raw标注信息
+                track_start_idx, track_end_idx = img_idx_to_track_idxs[img_idx_end]  # 跳过无标注帧
+                if track_start_idx == track_end_idx:
+                    continue
+                tracks = directory.tracks.tracks[track_start_idx:track_end_idx]
+                anns, ann_id = self.process_tracks_to_dict_balanced(tracks, ann_id, sample_id)
+                if len(anns) == 0:
+                    print(f"no annotations for sample: {sample_fname}")
+                    continue
+                # 添加到annotations.json的内容
+                annotations.extend(anns)
+                imags.append(
+                    {
+                        "id": sample_id,
+                        "width": self.width,
+                        "height": self.height,
+                        "file_name": sample_fname,
+                    }
+                )
+                save_path = self.output_dir / sample_fname
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(save_path, img)
+
+                sample_id += 1
+
+        ann_result = {"images": imags, "annotations": annotations, "categories": categories}
+        with open(self.annotations_path, "w") as f:
+            json.dump(ann_result, f, indent=4)
+
     def save_sample(self, sample_fname, img, events):
         save_path = self.output_dir / sample_fname  # type: Path
         save_path.mkdir(parents=True, exist_ok=True)
@@ -345,11 +550,9 @@ class DSECDataset:
     def process_tracks_to_dict(tracks, ann_id, img_id):
         annotations = []
         for track in tracks:
-            _, x, y, h, w, class_id, _, _ = track
-            if x < 0:
-                x = 0
-            if y < 0:
-                y = 0
+            _, x, y, w, h, class_id, _, _ = track
+            x = max(x, 0)
+            y = max(y, 0)
             assert all([x >= 0, y >= 0, h > 0, w > 0]), "invalid track: {}".format(track)
             annotations.append(
                 {
@@ -358,17 +561,49 @@ class DSECDataset:
                     "image_id": img_id,
                     "bbox": [int(x), int(y), int(w), int(h)],
                     "area": int(w * h),
+                    "iscrowd": 0.0,
                 }
             )
             ann_id += 1
+        return annotations, ann_id
+
+    @staticmethod
+    def process_tracks_to_dict_balanced(tracks, ann_id, img_id):
+        annotations = []
+        for track in tracks:
+            _, x, y, w, h, class_id, _, _ = track
+            x = max(x, 0)
+            y = max(y, 0)
+            assert all([x >= 0, y >= 0, h > 0, w > 0]), "invalid track: {}".format(track)
+            if class_id == 0 or class_id == 2:
+                if class_id == 2:
+                    class_id = 1
+                annotations.append(
+                    {
+                        "id": ann_id,
+                        "category_id": int(class_id),
+                        "image_id": img_id,
+                        "bbox": [int(x), int(y), int(w), int(h)],
+                        "area": int(w * h),
+                        "iscrowd": 0.0,
+                    }
+                )
+                ann_id += 1
         return annotations, ann_id
 
 
 def main():
     args = parse_args()
     dataset = DSECDataset(args.root_dir, args.output_dir, args.mode)
-    dataset.convert_to_coco()
+    # dataset.convert_to_coco_balanced()
+    # dataset.img_to_coco()
+    dataset.img_to_coco_balanced()
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    random.seed(42)
+    np.random.seed(42)
+    root_dir = Path("/data2/hzh/DSEC-COCO-balanced")
+    output_dir = Path("/data2/hzh/DSEC-COCO-balanced-mini")
+    extract_mini_dataset(root_dir, output_dir, sample_ratio=0.1)
