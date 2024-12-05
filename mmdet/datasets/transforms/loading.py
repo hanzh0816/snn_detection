@@ -68,7 +68,19 @@ class LoadImageFromNDArray(LoadImageFromFile):
 @TRANSFORMS.register_module()
 class LoadImageAndEventFromFolder(LoadImageFromFile):
     """
-    # snn_todo 添加docs
+    从文件夹中加载图片和事件
+
+    Required Keys:
+
+    - img_path
+
+    Modified Keys:
+
+    - img
+    - event
+    - img_shape
+    - ori_shape
+
     """
 
     def transform(self, results: dict) -> dict:
@@ -82,6 +94,8 @@ class LoadImageAndEventFromFolder(LoadImageFromFile):
         results["event"] = event
         results["img_shape"] = img.shape[:2]
         results["ori_shape"] = img.shape[:2]
+        # snn_tag 添加
+        results["scale_factor"] = (1, 1)
 
         return results
 
