@@ -1,25 +1,21 @@
 _base_ = ["./dataset/dsec_coco_balanced.py", "../_base_/default_runtime.py"]
 
-
-
 model = dict(
-    type="SpikeDeformableDETR",
-    phase="multi",
+    type="DeformableDETR",
     num_queries=100,
     num_feature_levels=4,
     with_box_refine=False,
-    as_two_stage=True,
+    as_two_stage=False,
     data_preprocessor=dict(
-        type="MultiModalDetDataPreprocessor",
+        type="DetDataPreprocessor",
         mean=[123.675, 116.28, 103.53],
         std=[58.395, 57.12, 57.375],
         bgr_to_rgb=True,
         pad_size_divisor=1,
     ),
-    img_backbone=dict(
+    backbone=dict(
         type="ResNet",
         depth=50,
-        in_channels=3,
         num_stages=4,
         out_indices=(1, 2, 3),
         frozen_stages=1,
@@ -28,26 +24,13 @@ model = dict(
         style="pytorch",
         init_cfg=dict(type="Pretrained", checkpoint="torchvision://resnet50"),
     ),
-    event_backbone=dict(
-        type="SpikeResNet",
-        depth=50,
-        num_stages=4,
-        out_indices=(1, 2, 3),
-    ),
-    img_neck=dict(
+    neck=dict(
         type="ChannelMapper",
         in_channels=[512, 1024, 2048],
         kernel_size=1,
         out_channels=256,
         act_cfg=None,
         norm_cfg=dict(type="GN", num_groups=32),
-        num_outs=4,
-    ),
-    event_neck=dict(
-        type="SpikeChannelMapper",
-        in_channels=[512, 1024, 2048],
-        kernel_size=1,
-        out_channels=256,
         num_outs=4,
     ),
     encoder=dict(  # DeformableDetrTransformerEncoder
@@ -70,19 +53,6 @@ model = dict(
         post_norm_cfg=None,
     ),
     positional_encoding=dict(num_feats=128, normalize=True, offset=-0.5),
-    spike_query_generator=dict(
-        num_layers=6,
-        num_queries=100,
-        layer_cfg=dict(
-            self_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0, batch_first=True),
-            ffn_cfg=dict(embed_dims=256, feedforward_channels=1024, num_fcs=2),
-            spike_cfg=dict(
-                spike_mode="lif",
-                spike_backend="torch",
-                spike_T=4,
-            ),
-        ),
-    ),
     bbox_head=dict(
         type="DeformableDETRHead",
         num_classes=2,
@@ -104,6 +74,13 @@ model = dict(
     ),
     test_cfg=dict(max_per_img=100),
 )
+
+# train_pipeline, NOTE the img_scale and the Pad's size_divisor is different
+# from the default setting in mmdet.
+
+train_dataloader = dict(batch_size=8)
+val_dataloader = dict(batch_size=8)
+test_dataloader = dict(batch_size=8)
 
 # optimizer
 optim_wrapper = dict(
@@ -134,16 +111,11 @@ param_scheduler = [
 # base_batch_size = (16 GPUs) x (2 samples per GPU)
 auto_scale_lr = dict(base_batch_size=32)
 
-custom_hooks = [
-    dict(type="SpikeResetHook"),
-]
-
-
 vis_backends = [
     dict(type="LocalVisBackend"),
     dict(
         type="WandbVisBackend",
-        init_kwargs=dict(project="snn_detection", name="spike-test"),
+        init_kwargs=dict(project="snn_detection", name="deformable-detr-dsec-mini"),
     ),
 ]
 visualizer = dict(vis_backends=vis_backends)

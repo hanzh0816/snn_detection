@@ -1,48 +1,49 @@
-data_root = "/data2/hzh/DSEC-COCO/"
+dataset_type = "CocoDataset"
+data_root = "/data2/hzh/DSEC-COCO-balanced-mini/"
 backend_args = None
+
 metainfo = dict(
-    classes=("pedestrian", "rider", "car", "bus", "truck", "bicycle", "motorcycle", "train"),
+    classes=("pedestrian", "car"),
     pallete=[
         (220, 20, 60),
         (119, 11, 32),
-        (0, 0, 142),
-        (0, 0, 230),
-        (106, 0, 228),
-        (0, 60, 100),
-        (0, 80, 100),
-        (0, 0, 70),
     ],
 )
 
+# train dataloader settings
 train_pipeline = [
     dict(type="LoadImageAndEventFromFolder"),
     dict(type="LoadAnnotations", with_bbox=True),
-    dict(type="PackMultiModalDetInputs"),
-]
-
-test_pipeline = [
-    dict(type="LoadImageAndEventFromFolder"),
-    dict(type="LoadAnnotations", with_bbox=True),
+    # dict(type="Resize", scale=(1333, 800), keep_ratio=True),
     dict(type="PackMultiModalDetInputs"),
 ]
 
 train_dataloader = dict(
     batch_size=2,
-    num_workers=2,
+    num_workers=4,
     persistent_workers=True,
+    pin_memory=True,
     sampler=dict(type="DefaultSampler", shuffle=True),
-    batch_sampler=dict(type="AspectRatioBatchSampler"),
+    batch_sampler=dict(type="AspectRatioBatchSampler", drop_last=True),
     dataset=dict(
-        type="CocoDataset",
+        type=dataset_type,
         data_root=data_root,
         metainfo=metainfo,
         data_prefix=dict(img="train/"),
-        filter_cfg=dict(filter_empty_gt=False, min_size=32),
         ann_file="annotations/train.json",
+        filter_cfg=dict(filter_empty_gt=False, min_size=32),
         pipeline=train_pipeline,
         backend_args=backend_args,
     ),
 )
+
+
+test_pipeline = [
+    dict(type="LoadImageAndEventFromFolder"),
+    dict(type="LoadAnnotations", with_bbox=True),
+    # dict(type="Resize", scale=(1333, 800), keep_ratio=True),
+    dict(type="PackMultiModalDetInputs"),
+]
 
 val_dataloader = dict(
     batch_size=1,
@@ -51,13 +52,13 @@ val_dataloader = dict(
     drop_last=False,
     sampler=dict(type="DefaultSampler", shuffle=False),
     dataset=dict(
-        type="CocoDataset",
+        type=dataset_type,
         data_root=data_root,
         metainfo=metainfo,
         data_prefix=dict(img="test/"),
-        filter_cfg=dict(filter_empty_gt=False, min_size=32),
         ann_file="annotations/test.json",
-        pipeline=train_pipeline,
+        test_mode=True,
+        pipeline=test_pipeline,
         backend_args=backend_args,
     ),
 )
